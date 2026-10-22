@@ -1,0 +1,3 @@
+# Comunicação e serialização do cliente e servidor.
+pyzmq>=26,<28
+msgpack>=1,<2
