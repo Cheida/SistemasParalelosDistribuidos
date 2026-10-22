@@ -1,0 +1,35 @@
+# Primeira versão com os programas Python.
+# Java e C serão adicionados quando as implementações estiverem prontas.
+services:
+  broker:
+    build: ./infra
+    ports:
+      - "127.0.0.1:5555:5555"
+      - "127.0.0.1:5556:5556"
+
+  servpy:
+    build: ./python
+    scale: 2
+    environment:
+      ENDERECO_BROKER: tcp://broker:5556
+      ARQUIVO_BANCO: /app/dados/servpy.db
+    volumes:
+      # Volume individual: cada réplica recebe seu próprio banco.
+      - /app/dados
+    depends_on:
+      - broker
+
+  cliente-python:
+    build: ./python
+    scale: 2
+    command: ["python", "cliente.py"]
+    environment:
+      ENDERECO_BROKER: tcp://broker:5555
+    depends_on:
+      - broker
+      - servpy
+
+# Mantido para preservar a referência ao volume da primeira versão.
+# As réplicas usam os volumes individuais definidos acima.
+volumes:
+  dados_servpy:

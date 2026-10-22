@@ -1,0 +1,2 @@
+# O broker encaminha os frames sem decodificar seu conteúdo.
+pyzmq>=26,<28
