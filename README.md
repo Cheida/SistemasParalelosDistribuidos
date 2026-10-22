@@ -47,6 +47,7 @@ ProjetoSPD/
 ├── docs/
 │   └── protocolo.md
 ├── infra/
+│   ├── proxy.py
 │   ├── broker.py
 │   ├── requirements.txt
 │   └── Dockerfile
@@ -83,7 +84,11 @@ A quantidade de clientes e servidores pode ser alterada no campo `scale` de cada
 
 ## Andamento atual
 
-Até o momento, estão implementados o cliente e o servidor Python, o broker e a configuração inicial do Docker Compose. O bot faz login e alterna entre tentar criar canais novos com nomes sequenciais, como `canal1` e `canal2`, e tentar criar canais já listados para verificar o tratamento de duplicatas. Os pedidos e as respostas são exibidos com o timestamp e os dados da operação.
+Até o momento, a versão Python implementa login, criação e listagem de canais, além do proxy Pub/Sub e das publicações da parte 2. Os bots criam canais enquanto a lista consultada tiver menos de cinco e acrescentam uma inscrição por rodada enquanto tiverem menos de três. A cada rodada, escolhem um canal e publicam dez mensagens aleatórias com intervalo de um segundo, continuando a receber mensagens durante as esperas.
+
+O broker atende pedidos e respostas, enquanto o proxy separado usa XSUB na porta 5557 e XPUB na 5558. Os tópicos e os eventos são serializados em MessagePack em dois frames, conforme o protocolo. Cada servidor salva as publicações antes do envio, além de registrar as requisições e respostas em seu SQLite. A resposta ok confirma a persistência e o encaminhamento ao PUB; não é confirmação de entrega a todos os assinantes.
+
+Como ainda não há replicação, a publicação não é recusada por ausência do canal no banco local do servidor que recebeu o pedido. Os bots selecionam os canais a partir das listas obtidas do serviço. A validação global dos canais e a replicação serão tratadas na evolução do trabalho.
 
 As implementações em Java e C, os testes de comunicação entre as três linguagens e as partes seguintes ainda estão em desenvolvimento. A presença das pastas no repositório não significa que todas as etapas já estejam concluídas.
 
