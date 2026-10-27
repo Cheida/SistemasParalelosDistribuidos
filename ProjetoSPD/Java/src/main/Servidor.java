@@ -1,3 +1,5 @@
+package br.fei.spd;
+
 import org.zeromq.SocketType;
 import org.zeromq.ZContext;
 import org.zeromq.ZMQ;
@@ -52,7 +54,9 @@ public class Servidor {
         );
     }
 
-    
+    /*
+     * Abre o banco SQLite e cria as tabelas necessárias.
+     */
     private void abrirBanco() throws Exception {
 
         Path caminho = Path.of(arquivoBanco).toAbsolutePath();
@@ -112,7 +116,9 @@ public class Servidor {
         );
     }
 
-  
+    /*
+     * Registra o pedido e a resposta completos.
+     */
     private void registrarTroca(
             byte[] pedido,
             byte[] resposta,
@@ -135,7 +141,9 @@ public class Servidor {
         }
     }
 
-   
+    /*
+     * Verifica se um nome de canal já existe no banco local.
+     */
     private boolean canalExiste(String canal) throws SQLException {
 
         String sql = "SELECT 1 FROM canais WHERE nome = ?";
@@ -150,7 +158,9 @@ public class Servidor {
         }
     }
 
-   
+    /*
+     * Processa uma requisição recebida do broker.
+     */
     private Map<String, Object> tratarPedido(
             Map<String, Object> pedido,
             ZMQ.Socket publicador
@@ -162,7 +172,9 @@ public class Servidor {
                 ? (String) operacaoObjeto
                 : "";
 
-       
+        /*
+         * Validamos os campos obrigatórios do envelope.
+         */
         if (!pedido.containsKey("operation")
                 || !pedido.containsKey("timestamp")
                 || !pedido.containsKey("payload")) {
@@ -192,7 +204,9 @@ public class Servidor {
         Map<String, Object> dados =
                 Protocolo.comoMapa(pedido.get("payload"));
 
-       
+        /*
+         * LOGIN, CREATE_CHANNEL e PUBLISH precisam de username.
+         */
         String usuario = null;
 
         if (operacao.equals("login")
@@ -220,7 +234,9 @@ public class Servidor {
             }
         }
 
-        
+        /*
+         * ETAPA 1 — LOGIN
+         */
         if (operacao.equals("login")) {
 
             String sql = """
@@ -248,7 +264,9 @@ public class Servidor {
             );
         }
 
-        
+        /*
+         * ETAPA 1 — CRIAR CANAL
+         */
         if (operacao.equals("create_channel")) {
 
             Object canalObjeto = dados.get("channel");
@@ -287,7 +305,9 @@ public class Servidor {
 
             } catch (SQLException e) {
 
-                
+                /*
+                 * A chave primária impede canais duplicados.
+                 */
                 if (canalExiste(canal)) {
                     return Protocolo.resposta(
                             operacao,
@@ -310,7 +330,9 @@ public class Servidor {
             );
         }
 
-        
+        /*
+         * ETAPA 1 — LISTAR CANAIS
+         */
         if (operacao.equals("list_channels")) {
 
             java.util.List<String> canais =
@@ -334,7 +356,9 @@ public class Servidor {
             );
         }
 
-        
+        /*
+         * ETAPA 2 — PUBLICAR MENSAGEM
+         */
         if (operacao.equals("publish")) {
 
             Object canalObjeto = dados.get("channel");
@@ -369,7 +393,12 @@ public class Servidor {
                 );
             }
 
-            
+            /*
+             * Não exigimos que o canal exista no banco local.
+             *
+             * O broker pode encaminhar o pedido a um servidor
+             * diferente daquele que criou o canal.
+             */
             String idEvento = UUID.randomUUID().toString();
 
             long timestampPublicacao = Protocolo.timestamp();
@@ -388,7 +417,9 @@ public class Servidor {
 
             byte[] eventoBytes = Protocolo.empacotar(evento);
 
-            
+            /*
+             * Primeiro persistimos a publicação.
+             */
             String sql = """
                 INSERT INTO publicacoes
                 (id, username, canal, mensagem,
@@ -410,7 +441,13 @@ public class Servidor {
                 stmt.executeUpdate();
             }
 
-           
+            /*
+             * O tópico também é codificado em MessagePack.
+             *
+             * O evento possui dois frames:
+             * 1. Tópico.
+             * 2. Conteúdo do evento.
+             */
             byte[] topicoBytes = Protocolo.empacotar(canal);
 
             publicador.send(topicoBytes, ZMQ.SNDMORE);
@@ -433,7 +470,9 @@ public class Servidor {
             );
         }
 
-       
+        /*
+         * Operação desconhecida.
+         */
         return Protocolo.resposta(
                 operacao,
                 "unknown_operation",
@@ -441,7 +480,9 @@ public class Servidor {
         );
     }
 
-    
+    /*
+     * Inicializa os sockets e processa as requisições continuamente.
+     */
     public void executar() throws Exception {
 
         abrirBanco();
@@ -478,7 +519,9 @@ public class Servidor {
 
                 while (!Thread.currentThread().isInterrupted()) {
 
-                   
+                    /*
+                     * O REP espera uma requisição.
+                     */
                     byte[] pedidoBytes = servidor.recv(0);
 
                     if (pedidoBytes == null) {
@@ -503,7 +546,9 @@ public class Servidor {
 
                     } catch (IOException e) {
 
-                        
+                        /*
+                         * Não foi possível decodificar a mensagem.
+                         */
                         pedido = Protocolo.mapa();
 
                         resposta = Protocolo.resposta(
@@ -527,7 +572,9 @@ public class Servidor {
                         );
                     }
 
-                   
+                    /*
+                     * Registra a troca antes de enviar a resposta.
+                     */
                     byte[] respostaBytes =
                             Protocolo.empacotar(resposta);
 
@@ -557,7 +604,10 @@ public class Servidor {
                                 Protocolo.empacotar(resposta);
                     }
 
-                   
+                    /*
+                     * O socket REP deve responder antes de
+                     * receber a próxima requisição.
+                     */
                     servidor.send(respostaBytes, 0);
                 }
 
