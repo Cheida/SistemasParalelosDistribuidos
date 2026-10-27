@@ -59,7 +59,9 @@ public class Cliente {
         );
     }
 
-   
+    /*
+     * Obtém o hostname do computador.
+     */
     private static String nomeComputador() {
 
         try {
@@ -69,7 +71,9 @@ public class Cliente {
         }
     }
 
-  
+    /*
+     * Exibe os campos principais de uma mensagem.
+     */
     private void mostrarMensagem(
             String acao,
             Map<String, Object> mensagem
@@ -133,8 +137,13 @@ public class Cliente {
         }
     }
 
-
-  
+    /*
+     * Recebe as publicações disponíveis no socket SUB.
+     *
+     * Cada publicação contém:
+     * 1. Tópico em MessagePack.
+     * 2. Evento em MessagePack.
+     */
     private void receberPublicacoes(ZMQ.Socket inscrito) {
 
         for (int i = 0; i < 100; i++) {
@@ -226,7 +235,10 @@ public class Cliente {
         }
     }
 
-    
+    /*
+     * Espera durante determinado intervalo sem parar de receber
+     * as publicações dos canais inscritos.
+     */
     private void esperar(
             ZMQ.Socket inscrito,
             double segundos
@@ -254,7 +266,13 @@ public class Cliente {
         }
     }
 
-  
+    /*
+     * Envia um pedido REQ e aguarda a resposta.
+     *
+     * Cada pedido utiliza um socket próprio. Se houver timeout,
+     * o socket é fechado e poderá ser criado outro na próxima
+     * tentativa.
+     */
     private Map<String, Object> fazerPedido(
             ZContext contexto,
             ZMQ.Socket inscrito,
@@ -294,7 +312,10 @@ public class Cliente {
 
             while (System.nanoTime() < fim) {
 
-               
+                /*
+                 * Continuamos recebendo publicações enquanto
+                 * aguardamos a resposta do servidor.
+                 */
                 receberPublicacoes(inscrito);
 
                 byte[] respostaBytes =
@@ -353,7 +374,9 @@ public class Cliente {
         return null;
     }
 
-  
+    /*
+     * Consulta a lista de canais.
+     */
     private List<String> listarCanais(
             ZContext contexto,
             ZMQ.Socket inscrito
@@ -393,7 +416,13 @@ public class Cliente {
         return canais;
     }
 
-  
+    /*
+     * Reproduz a preparação de canais do cliente Python.
+     *
+     * - Consulta os canais.
+     * - Tenta criar um novo se houver menos de cinco.
+     * - Adiciona uma inscrição se houver menos de três.
+     */
     private List<String> prepararCanais(
             ZContext contexto,
             ZMQ.Socket inscrito,
@@ -459,7 +488,9 @@ public class Cliente {
             }
         }
 
-       
+        /*
+         * Inscreve o bot em até três canais.
+         */
         if (assinaturas.size() < 3) {
 
             List<String> opcoes = new ArrayList<>();
@@ -479,7 +510,10 @@ public class Cliente {
 
                 try {
 
-                    
+                    /*
+                     * O tópico deve ser serializado em MessagePack.
+                     * Não podemos usar apenas os bytes UTF-8 do nome.
+                     */
                     byte[] topico =
                             Protocolo.empacotar(canal);
 
@@ -493,7 +527,10 @@ public class Cliente {
                                     + canal
                     );
 
-                  
+                    /*
+                     * Espera para permitir que a inscrição
+                     * atravesse o proxy.
+                     */
                     esperar(inscrito, 1);
 
                 } catch (IOException e) {
@@ -509,7 +546,9 @@ public class Cliente {
         return canais;
     }
 
-    
+    /*
+     * Fluxo principal do bot.
+     */
     public void executar() throws InterruptedException {
 
         try (ZContext contexto = new ZContext()) {
@@ -524,7 +563,11 @@ public class Cliente {
 
             try {
 
-                
+                /*
+                 * Primeiro, realiza o login.
+                 *
+                 * Se houver falha, espera e tenta novamente.
+                 */
                 while (!Thread.currentThread().isInterrupted()) {
 
                     Map<String, Object> resposta = fazerPedido(
@@ -545,7 +588,10 @@ public class Cliente {
                     esperar(inscrito, intervaloTentativas);
                 }
 
-                
+                /*
+                 * Três passagens iniciais para começar com
+                 * até três inscrições.
+                 */
                 for (int i = 0; i < 3; i++) {
 
                     prepararCanais(
@@ -555,7 +601,9 @@ public class Cliente {
                     );
                 }
 
-                
+                /*
+                 * Loop contínuo de publicação.
+                 */
                 while (!Thread.currentThread().isInterrupted()) {
 
                     List<String> canais = prepararCanais(
@@ -574,7 +622,10 @@ public class Cliente {
                         continue;
                     }
 
-                    
+                    /*
+                     * Escolhemos um canal para o lote.
+                     * Não precisa ser um canal inscrito.
+                     */
                     String canal = canais.get(
                             random.nextInt(canais.size())
                     );
@@ -602,7 +653,11 @@ public class Cliente {
                                 (System.nanoTime() - inicio)
                                         / 1_000_000_000.0;
 
-                       
+                        /*
+                         * Mantém aproximadamente um segundo
+                         * entre o início das requisições,
+                         * sem gerar rajadas para compensar atrasos.
+                         */
                         esperar(
                                 inscrito,
                                 Math.max(
