@@ -1,3 +1,5 @@
+package br.fei.spd;
+
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.msgpack.jackson.dataformat.MessagePackFactory;
@@ -11,21 +13,29 @@ public final class Protocolo {
     private Protocolo() {
     }
 
-  
+    /*
+     * O mesmo formato MessagePack utilizado na implementação Python.
+     */
     public static final ObjectMapper MAPPER =
             new ObjectMapper(new MessagePackFactory());
 
-  
+    /*
+     * Retorna o timestamp em milissegundos desde Unix epoch.
+     */
     public static long timestamp() {
         return System.currentTimeMillis();
     }
 
-  
+    /*
+     * Serializa uma estrutura Java em bytes MessagePack.
+     */
     public static byte[] empacotar(Object objeto) throws IOException {
         return MAPPER.writeValueAsBytes(objeto);
     }
 
-  
+    /*
+     * Desserializa uma mensagem MessagePack em um mapa.
+     */
     public static Map<String, Object> desempacotarMapa(byte[] bytes)
             throws IOException {
 
@@ -36,7 +46,9 @@ public final class Protocolo {
         );
     }
 
-   
+    /*
+     * Cria mapas preservando a ordem de inserção.
+     */
     public static Map<String, Object> mapa(Object... pares) {
 
         if (pares.length % 2 != 0) {
@@ -58,7 +70,9 @@ public final class Protocolo {
         return resultado;
     }
 
-   
+    /*
+     * Obtém um mapa de uma estrutura recebida.
+     */
     @SuppressWarnings("unchecked")
     public static Map<String, Object> comoMapa(Object objeto) {
 
@@ -69,7 +83,9 @@ public final class Protocolo {
         return null;
     }
 
-    
+    /*
+     * Lê uma variável de ambiente ou utiliza o valor padrão.
+     */
     public static String ambiente(
             String nome,
             String valorPadrao
@@ -84,7 +100,15 @@ public final class Protocolo {
         return valor;
     }
 
-  
+    /*
+     * Valida nomes de usuários e canais.
+     *
+     * Regras:
+     * - De 1 a 32 caracteres.
+     * - Letras sem acento.
+     * - Números.
+     * - Hífen e sublinhado.
+     */
     public static boolean nomeValido(String nome) {
 
         if (nome == null) {
@@ -94,7 +118,9 @@ public final class Protocolo {
         return nome.matches("[A-Za-z0-9_-]{1,32}");
     }
 
-    
+    /*
+     * Verifica se o timestamp é um inteiro válido de 64 bits.
+     */
     public static boolean timestampValido(Object valor) {
 
         if (!(valor instanceof Number numero)) {
@@ -110,7 +136,11 @@ public final class Protocolo {
         return timestamp >= 0;
     }
 
-   
+    /*
+     * Monta uma resposta no formato definido pelo protocolo.
+     *
+     * Quando ocorre um erro, o payload fica vazio.
+     */
     public static Map<String, Object> resposta(
             String operacao,
             String status,
