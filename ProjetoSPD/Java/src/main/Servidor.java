@@ -1,5 +1,3 @@
-package br.fei.spd;
-
 import org.zeromq.SocketType;
 import org.zeromq.ZContext;
 import org.zeromq.ZMQ;
