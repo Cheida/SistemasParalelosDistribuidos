@@ -54,9 +54,8 @@ services:
   cliente-java:
     build: ./Java
     scale: 2
-    command: ["mvn", "exec:java", "-Dexec.mainClass=Cliente"]
+    command: ["java", "-cp", "target/classes:target/lib/*", "Cliente"]
     environment:
-      NOME_BOT: bot-java
       ENDERECO_BROKER: tcp://broker:5555
       ENDERECO_INSCRICAO: tcp://proxy:5558
     depends_on:
