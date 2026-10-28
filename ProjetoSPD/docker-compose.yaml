@@ -39,6 +39,7 @@ services:
 
   servjava:
     build: ./Java
+    scale: 2
     environment:
       NOME_SERVIDOR: servjava
       ENDERECO_BROKER: tcp://broker:5556
@@ -52,6 +53,7 @@ services:
 
   cliente-java:
     build: ./Java
+    scale: 2
     command: ["mvn", "exec:java", "-Dexec.mainClass=Cliente"]
     environment:
       NOME_BOT: bot-java
