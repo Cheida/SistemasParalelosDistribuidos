@@ -64,8 +64,7 @@ services:
       - proxy
       - servjava
 
-
-    servc:
+  servc:
     build: ./C
     scale: 2
     environment:
@@ -89,6 +88,7 @@ services:
       - broker
       - proxy
       - servc
+
 volumes:
   dados_servjava:
   dados_servpy:
