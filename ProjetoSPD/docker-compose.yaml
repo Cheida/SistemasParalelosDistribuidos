@@ -54,15 +54,39 @@ services:
   cliente-java:
     build: ./Java
     scale: 2
-    command: ["mvn", "exec:java", "-Dexec.mainClass=Cliente"]
+    command: ["java", "-cp", "target/classes:target/lib/*", "Cliente"]
     environment:
-      NOME_BOT: bot-java
       ENDERECO_BROKER: tcp://broker:5555
       ENDERECO_INSCRICAO: tcp://proxy:5558
     depends_on:
       - broker
       - proxy
       - servjava
+
+  servc:
+    build: ./C
+    scale: 2
+    environment:
+      ENDERECO_BROKER: tcp://broker:5556
+      ENDERECO_PUBLICACAO: tcp://proxy:5557
+      ARQUIVO_BANCO: /app/dados/servc.db
+    volumes:
+      - /app/dados
+    depends_on:
+      - broker
+      - proxy
+
+  cliente-c:
+    build: ./C
+    scale: 2
+    command: ["./cliente"]
+    environment:
+      ENDERECO_BROKER: tcp://broker:5555
+      ENDERECO_INSCRICAO: tcp://proxy:5558
+    depends_on:
+      - broker
+      - proxy
+      - servc
 
 volumes:
   dados_servjava:
