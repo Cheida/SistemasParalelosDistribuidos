@@ -1,5 +1,3 @@
-# Partes 1 e 2 em Python.
-# Java e C serão adicionados quando as implementações estiverem prontas.
 services:
   broker:
     build: ./infra
@@ -22,7 +20,6 @@ services:
       ENDERECO_PUBLICACAO: tcp://proxy:5557
       ARQUIVO_BANCO: /app/dados/servpy.db
     volumes:
-      # Volume individual: cada réplica recebe seu próprio banco.
       - /app/dados
     depends_on:
       - broker
@@ -40,7 +37,33 @@ services:
       - proxy
       - servpy
 
-# Mantido para preservar a referência ao volume da primeira versão.
-# As réplicas usam os volumes individuais definidos acima.
+  servjava:
+    build: ./Java
+    scale: 2
+    environment:
+      NOME_SERVIDOR: servjava
+      ENDERECO_BROKER: tcp://broker:5556
+      ENDERECO_PUBLICACAO: tcp://proxy:5557
+      ARQUIVO_BANCO: /app/dados/servjava.db
+    volumes:
+      - dados_servjava:/app/dados
+    depends_on:
+      - broker
+      - proxy
+
+  cliente-java:
+    build: ./Java
+    scale: 2
+    command: ["mvn", "exec:java", "-Dexec.mainClass=Cliente"]
+    environment:
+      NOME_BOT: bot-java
+      ENDERECO_BROKER: tcp://broker:5555
+      ENDERECO_INSCRICAO: tcp://proxy:5558
+    depends_on:
+      - broker
+      - proxy
+      - servjava
+
 volumes:
+  dados_servjava:
   dados_servpy:
