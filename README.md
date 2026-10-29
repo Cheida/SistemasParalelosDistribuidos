@@ -49,20 +49,32 @@ ProjetoSPD/
 ├── infra/
 │   ├── proxy.py
 │   ├── broker.py
+│   ├── proxy.py
 │   ├── requirements.txt
 │   └── Dockerfile
 ├── python/
 │   ├── cliente.py
 │   ├── servidor.py
+│   ├── referencia.py
+│   ├── registro.py
+│   ├── relogio.py
 │   ├── requirements.txt
 │   └── Dockerfile
 ├── Java/
-│   ├── cliente.java
-│   ├── servidor.java
+│   ├── pom.xml
+│   ├── src/main/java/
+│   │   ├── Cliente.java
+│   │   ├── Servidor.java
+│   │   ├── Protocolo.java
+│   │   └── RegistroServidor.java
 │   └── Dockerfile
 └── C/
     ├── cliente.c
     ├── servidor.c
+    ├── protocolo.c
+    ├── protocolo.h
+    ├── referencia.c
+    ├── referencia.h
     └── Dockerfile
 ```
 
@@ -84,17 +96,37 @@ A quantidade de clientes e servidores pode ser alterada no campo `scale` de cada
 
 ## Andamento atual
 
-Até o momento, a versão Python implementa login, criação e listagem de canais, além do proxy Pub/Sub e das publicações da parte 2. Os bots criam canais enquanto a lista consultada tiver menos de cinco e acrescentam uma inscrição por rodada enquanto tiverem menos de três. A cada rodada, escolhem um canal e publicam dez mensagens aleatórias com intervalo de um segundo, continuando a receber mensagens durante as esperas.
+As implementações Python, Java e C contêm as funcionalidades das partes 1, 2 e 3: login, canais, publicações, relógios lógicos, cadastro de servidores e ranks, heartbeat e ajuste do relógio físico. O serviço de referência é compartilhado pelas três linguagens e escrito em Python.
 
-O broker atende pedidos e respostas, enquanto o proxy separado usa XSUB na porta 5557 e XPUB na 5558. Os tópicos e os eventos são serializados em MessagePack em dois frames, conforme o protocolo. Cada servidor salva as publicações antes do envio, além de registrar as requisições e respostas em seu SQLite. A resposta ok confirma a persistência e o encaminhamento ao PUB; não é confirmação de entrega a todos os assinantes.
+Cada linguagem tem seu cliente e servidor e usa o mesmo protocolo MessagePack. A próxima etapa será a eleição de coordenador; a replicação dos bancos ainda será feita na parte 5.
 
-Como ainda não há replicação, a publicação não é recusada por ausência do canal no banco local do servidor que recebeu o pedido. Os bots selecionam os canais a partir das listas obtidas do serviço. A validação global dos canais e a replicação serão tratadas na evolução do trabalho.
+## Parte 3 — como testar
 
-As implementações em Java e C, os testes de comunicação entre as três linguagens e as partes seguintes ainda estão em desenvolvimento. A presença das pastas no repositório não significa que todas as etapas já estejam concluídas.
+```sh
+docker compose up --build
+```
 
-Na versão atual, os servidores possuem bancos independentes e ainda não replicam os canais entre si. Por isso, a lista recebida por um bot depende do servidor que atender ao pedido.
+A execução padrão inicia broker, proxy, referência e dois clientes e dois servidores de cada linguagem: Python, Java e C. Não é necessário ativar perfis ou executar os serviços separadamente. A quantidade de cada serviço pode ser alterada no campo scale do Compose.
 
-Os bancos dos containers atuais ficam em volumes individuais anônimos. Parar e iniciar os mesmos containers preserva esses dados, mas remover os containers com `docker compose down` não permite que um novo `up` reassocie automaticamente os volumes antigos. A organização da persistência ainda precisa ser refinada para a entrega.
+Todos os pedidos, respostas e eventos das três linguagens têm o campo `clock`. O contador começa em zero, aumenta antes de enviar e recebe o máximo entre o valor local e o recebido, seguindo a regra do enunciado. O broker e o proxy continuam apenas encaminhando as mensagens, sem alterar os contadores.
+
+O novo serviço `referencia` recebe os servidores na porta 5559, atribui ranks sem duplicar nomes e informa quais estão ativos. Cada servidor envia heartbeat depois de dez pedidos recebidos e usa o timestamp da resposta para ajustar o próprio relógio. Esse ajuste fica no programa e não muda a hora do computador.
+
+O prazo de inatividade é configurado por `PRAZO_HEARTBEAT`, inicialmente 60 segundos. Como o heartbeat depende da quantidade de pedidos, um servidor ocioso também pode sair da lista quando esse prazo acabar. O rank fica reservado para o nome e é preservado no banco da referência. O formato completo e as escolhas estão em [docs/protocolo.md](docs/protocolo.md).
+
+Para simular um relógio adiantado ou atrasado, a variável `DESVIO_INICIAL_MS` do servidor aceita uma diferença em milissegundos. Os registros mostram o rank, o heartbeat, a correção física e os contadores das mensagens.
+
+## Verificação da parte 3
+
+Testamos seis servidores e seis bots, sendo dois de cada linguagem, em uma rede Docker separada com bancos temporários. Conferimos ranks únicos, heartbeat, ajuste de desvios físicos simulados de 60 segundos, contadores nas requisições, respostas e publicações e gravação das trocas em cada banco. Também verificamos clientes Python, Java e C sendo atendidos por servidores das três linguagens.
+
+## Armazenamento e limitações atuais
+
+Cada servidor mantém seus próprios logins, canais, publicações e registros das trocas em SQLite. Ainda não existe replicação, portanto as listas de canais podem variar entre os servidores. O bot escolhe canais que foram listados, e a publicação não depende de o canal existir no cadastro local do servidor que atendeu aquele pedido.
+
+Todos os servidores usam volumes individuais anônimos. Parar e iniciar os mesmos containers mantém os dados; depois de remover os containers com `docker compose down`, um novo `up` não reassocia automaticamente esses volumes antigos. A referência usa o volume nomeado `dados_referencia`. As réplicas Java também têm nomes e bancos separados. O antigo volume compartilhado dados_servjava permanece declarado, mas não é montado nas novas réplicas e seus dados não são migrados automaticamente.
+
+Pub/Sub não confirma recebimento individual pelos bots. A resposta `ok` à publicação indica que o servidor salvou e encaminhou o evento ao PUB, não que todos os assinantes o receberam. O histórico permanece armazenado, mas não há replay automático nesta etapa.
 
 ## Enunciado
 
