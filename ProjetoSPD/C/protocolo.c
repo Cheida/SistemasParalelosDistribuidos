@@ -7,11 +7,54 @@
 #include <string.h>
 #include <time.h>
 
+static int64_t contador = 0;
+static int64_t ajuste_ms = 0;
+
+int64_t relogio_atual(void) { return contador; }
+
+int64_t relogio_enviar(void)
+{
+    if (contador == INT64_MAX) {
+        fputs("Contador lógico esgotado.\n", stderr);
+        exit(EXIT_FAILURE);
+    }
+    return ++contador;
+}
+
+int relogio_receber(const msgpack_object *mensagem)
+{
+    const msgpack_object *clock = buscar(mensagem, "clock");
+    if (clock == NULL || clock->type != MSGPACK_OBJECT_POSITIVE_INTEGER ||
+        clock->via.u64 > INT64_MAX) return -1;
+    /* Não somamos 1 ao receber: essa é a regra do enunciado. */
+    if ((int64_t)clock->via.u64 > contador) contador = (int64_t)clock->via.u64;
+    return 0;
+}
+
+void relogio_iniciar_servidor(void)
+{
+    ajuste_ms = strtoll(ambiente("DESVIO_INICIAL_MS", "0"), NULL, 10);
+}
+
+int64_t relogio_sincronizar(int64_t referencia, double duracao)
+{
+    int64_t hora_sistema = timestamp_ms() - ajuste_ms;
+    ajuste_ms = referencia + (int64_t)(duracao * 500.0 + 0.5) - hora_sistema;
+    return ajuste_ms;
+}
+
+int empacotar_clock(msgpack_packer *pk)
+{
+    int erro = empacotar_texto(pk, "clock", 5);
+    erro |= msgpack_pack_int64(pk, relogio_enviar());
+    return erro;
+}
+
 int64_t timestamp_ms(void)
 {
     struct timespec agora;
     clock_gettime(CLOCK_REALTIME, &agora);
-    return (int64_t)agora.tv_sec * 1000 + agora.tv_nsec / 1000000;
+    return (int64_t)agora.tv_sec * 1000 + agora.tv_nsec / 1000000 + ajuste_ms;
 }
 
 double agora_monotonico(void)

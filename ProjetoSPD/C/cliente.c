@@ -134,6 +134,7 @@ static void mostrar_mensagem(const char *acao, const msgpack_object *mensagem)
     static const char *campos[][2] = {
         {"username", "usuário"}, {"channel", "canal"}, {"message", "mensagem"}};
     const msgpack_object *operacao = buscar(mensagem, "operation");
+    const msgpack_object *clock = buscar(mensagem, "clock");
     const msgpack_object *instante = buscar(mensagem, "timestamp");
     const msgpack_object *dados = buscar(mensagem, "payload");
     const msgpack_object *status = buscar(mensagem, "status");
@@ -144,6 +145,9 @@ static void mostrar_mensagem(const char *acao, const msgpack_object *mensagem)
     } else {
         fputs("desconhecida", stdout);
     }
+    fputs(" | clock: ", stdout);
+    if (clock != NULL) imprimir_objeto(stdout, clock, false);
+    else fputs("ausente", stdout);
     fputs(" | timestamp: ", stdout);
     if (instante != NULL) {
         imprimir_objeto(stdout, instante, false);
@@ -206,6 +210,7 @@ static bool mostrar_publicacao(zmq_msg_t *frames, int64_t recebido_em)
                  memcmp(canal->via.str.ptr, canal_evento->via.str.ptr, canal->via.str.size) == 0 &&
                  eh_inteiro(instante) && usuario != NULL && texto != NULL &&
                  texto->type == MSGPACK_OBJECT_STR;
+        if (valida && relogio_receber(&evento.data) != 0) valida = false;
         if (valida) {
             printf("[%s] PUBLICAÇÃO | canal: ", nome_bot);
             imprimir_objeto(stdout, canal, false);
@@ -215,7 +220,8 @@ static bool mostrar_publicacao(zmq_msg_t *frames, int64_t recebido_em)
             imprimir_objeto(stdout, texto, false);
             fputs(" | envio: ", stdout);
             imprimir_objeto(stdout, instante, false);
-            printf(" | recebimento: %lld\n", (long long)recebido_em);
+            printf(" | recebimento: %lld | clock local: %lld\n",
+                   (long long)recebido_em, (long long)relogio_atual());
             if (mensagens_completas()) {
                 fputs("    conteúdo: ", stdout);
                 imprimir_objeto(stdout, &evento.data, true);
@@ -308,11 +314,12 @@ static int montar_pedido(const char *operacao, const Campo *campos, size_t quant
     msgpack_packer pk;
     int erro = 0;
     msgpack_packer_init(&pk, buffer, msgpack_sbuffer_write);
-    erro |= msgpack_pack_map(&pk, 3);
+    erro |= msgpack_pack_map(&pk, 4);
     erro |= empacotar_texto(&pk, "operation", 9);
     erro |= empacotar_texto(&pk, operacao, strlen(operacao));
     erro |= empacotar_texto(&pk, "timestamp", 9);
     erro |= msgpack_pack_int64(&pk, timestamp_ms());
+    erro |= empacotar_clock(&pk);
     erro |= empacotar_texto(&pk, "payload", 7);
     erro |= msgpack_pack_map(&pk, quantidade);
     for (size_t i = 0; i < quantidade; i++) {
@@ -329,6 +336,7 @@ static bool resposta_valida(const char *operacao, Resposta *resposta)
         !eh_inteiro(buscar(objeto, "timestamp"))) {
         return false;
     }
+    if (relogio_receber(objeto) != 0) return false;
     resposta->status = buscar(objeto, "status");
     resposta->payload = buscar(objeto, "payload");
     return resposta->status != NULL && resposta->status->type == MSGPACK_OBJECT_STR &&

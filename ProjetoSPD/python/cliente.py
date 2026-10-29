@@ -1,16 +1,19 @@
-"""Bot das partes 1 e 2: login, canais, inscrições e publicações automáticas.
+"""Bot das partes 1 a 3: login, canais, inscrições e publicações automáticas.
 Execute: python python/cliente.py. Os endereços também podem vir do Compose.
 """
 import os
+import signal
 import random
 import time
 import msgpack
 import zmq
+from relogio import Relogio
 
 endereco_broker = os.getenv("ENDERECO_BROKER", "tcp://localhost:5555")
 endereco_inscricao = os.getenv("ENDERECO_INSCRICAO", "tcp://localhost:5558")
 identificador = os.getenv("HOSTNAME", "local")
 nome_bot = os.getenv("NOME_BOT", f"bot-py-{identificador[:12]}")
+relogio = Relogio()
 tempo_resposta_ms = 5000
 intervalo_tentativas = 2
 intervalo_mensagens = 1
@@ -22,13 +25,13 @@ frases = [
 
 def timestamp():
     # Timestamp do protocolo, em milissegundos desde Unix epoch.
-    return time.time_ns() // 1_000_000
+    return relogio.timestamp()
 
 
 def mostrar_mensagem(acao, mensagem):
     dados = mensagem.get("payload", {})
     partes = [mensagem.get("operation", "desconhecida"),
-              f"timestamp: {mensagem.get('timestamp')}"]
+              f"timestamp: {mensagem.get('timestamp')}", f"clock: {mensagem.get('clock', 'ausente')}"]
     for campo, rotulo in [("username", "usuário"), ("channel", "canal"),
                           ("message", "mensagem")]:
         if campo in dados:
@@ -62,10 +65,12 @@ def receber_publicacoes(inscrito):
                     or type(evento["timestamp"]) is not int
                     or not isinstance(dados["message"], str)):
                 raise ValueError("Publicação fora do protocolo")
+            relogio.receber(evento)
             print(
                 f"[{nome_bot}] PUBLICAÇÃO | canal: {canal} | "
                 f"usuário: {dados['username']} | mensagem: {dados['message']} | "
-                f"envio: {evento['timestamp']} | recebimento: {recebido_em}",
+                f"envio: {evento['timestamp']} | recebimento: {recebido_em} | "
+                f"clock recebido: {evento['clock']} | clock local: {relogio.contador}",
                 flush=True,
             )
             if os.getenv("MENSAGENS_COMPLETAS", "0") == "1":
@@ -93,6 +98,7 @@ def fazer_pedido(contexto, inscrito, operacao, dados):
     socket.setsockopt(zmq.SNDTIMEO, tempo_resposta_ms)
     socket.connect(endereco_broker)
     try:
+        relogio.preparar_envio(pedido)
         mostrar_mensagem("ENVIANDO", pedido)
         socket.send(msgpack.packb(pedido, use_bin_type=True))
         fim = time.monotonic() + tempo_resposta_ms / 1000
@@ -107,6 +113,7 @@ def fazer_pedido(contexto, inscrito, operacao, dados):
                         or not isinstance(resposta.get("status"), str)
                         or not isinstance(resposta.get("payload"), dict)):
                     raise ValueError("Resposta fora do protocolo")
+                relogio.receber(resposta)
                 mostrar_mensagem("RECEBENDO", resposta)
                 return resposta
         print(f"[{nome_bot}] Tempo de resposta esgotado.", flush=True)
@@ -159,6 +166,11 @@ def main():
     inscrito = contexto.socket(zmq.SUB)
     inscrito.connect(endereco_inscricao)
     assinaturas = set()
+
+    def encerrar(sinal, frame):
+        raise KeyboardInterrupt
+
+    signal.signal(signal.SIGTERM, encerrar)
     try:
         while True:
             resposta = fazer_pedido(contexto, inscrito, "login", {"username": nome_bot})

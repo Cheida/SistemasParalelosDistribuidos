@@ -1,7 +1,8 @@
-"""Recebe pedidos em MessagePack e salva logins e canais em SQLite.
+"""Partes 1 a 3: pedidos, publicações, persistência, relógios e heartbeat.
 Execute na pasta do projeto: python python/servidor.py
 """
 import os
+import signal
 import uuid
 import re
 import sqlite3
@@ -9,6 +10,8 @@ import time
 from pathlib import Path
 import msgpack
 import zmq
+from relogio import Relogio
+from registro import Registro
 
 # Cada servidor pode receber um nome e um caminho de banco próprios.
 endereco_broker = os.getenv("ENDERECO_BROKER", "tcp://localhost:5556")
@@ -16,6 +19,8 @@ endereco_broker = os.getenv("ENDERECO_BROKER", "tcp://localhost:5556")
 identificador = os.getenv("HOSTNAME")
 nome_padrao = f"servpy-{identificador[:12]}" if identificador else "servpy"
 nome_servidor = os.getenv("NOME_SERVIDOR", nome_padrao)
+endereco_referencia = os.getenv("ENDERECO_REFERENCIA", "tcp://localhost:5559")
+relogio = Relogio(int(os.getenv("DESVIO_INICIAL_MS", "0")))
 endereco_publicacao = os.getenv("ENDERECO_PUBLICACAO", "tcp://localhost:5557")
 pasta_projeto = Path(__file__).resolve().parent.parent
 arquivo_banco = os.getenv(
@@ -40,7 +45,7 @@ def mostrar_mensagem(acao, mensagem):
         "publish": "publicar",
     }
     operacao = mensagem.get("operation", "desconhecida")
-    partes = [nomes.get(operacao, operacao), f"timestamp: {mensagem.get('timestamp', 'ausente')}"]
+    partes = [nomes.get(operacao, operacao), f"timestamp: {mensagem.get('timestamp', 'ausente')}", f"clock: {mensagem.get('clock', 'ausente')}"]
     dados = mensagem.get("payload", {})
     if isinstance(dados, dict):
         if "username" in dados:
@@ -66,7 +71,7 @@ def mostrar_mensagem(acao, mensagem):
 
 def timestamp():
     # Usamos a mesma unidade do cliente: milissegundos desde Unix epoch.
-    return time.time_ns() // 1_000_000
+    return relogio.timestamp()
 
 
 def abrir_banco():
@@ -124,11 +129,13 @@ def montar_resposta(pedido, payload=None, erro=None):
 
 def tratar_pedido(pedido, banco, publicador=None):
     # Antes de executar a operação, conferimos os campos e seus tipos.
-    campos = {"operation", "timestamp", "payload"}
+    campos = {"operation", "timestamp", "clock", "payload"}
     if not campos.issubset(pedido):
         return montar_resposta(pedido, erro="INVALID_REQUEST")
     if (
         not isinstance(pedido["operation"], str)
+        or type(pedido["clock"]) is not int
+        or not 0 <= pedido["clock"] <= 2**63 - 1
         or type(pedido["timestamp"]) is not int
         or not 0 <= pedido["timestamp"] <= 2**63 - 1
         or not isinstance(pedido["payload"], dict)
@@ -197,6 +204,8 @@ def tratar_pedido(pedido, banco, publicador=None):
                 "request_timestamp": pedido["timestamp"],
             },
         }
+        # PUB e REP são envios diferentes e avançam o mesmo contador local.
+        relogio.preparar_envio(evento)
         evento_binario = msgpack.packb(evento, use_bin_type=True)
         # Primeiro salvamos em disco; só depois tentamos publicar.
         with banco:
@@ -231,10 +240,28 @@ def main():
     publicador = contexto.socket(zmq.PUB)
     publicador.connect(endereco_publicacao)
     print(f"{nome_servidor} iniciado. Banco: {arquivo_banco}", flush=True)
+    registro = Registro(
+        contexto, relogio, nome_servidor,
+        os.getenv("ENDERECO_SERVIDOR", os.getenv("HOSTNAME", "localhost")),
+        endereco_referencia,
+    )
+    recebidas = 0
+
+    def encerrar(sinal, frame):
+        raise KeyboardInterrupt
+
+    signal.signal(signal.SIGTERM, encerrar)
     try:
+        if registro.registrar():
+            registro.listar()
         while True:
-            # Aqui aguardamos um pedido, sem gastar CPU consultando em loop.
+            # Se a referência iniciou depois, repetimos o cadastro sem travar o serviço.
+            if registro.rank is None and time.monotonic() >= registro.proxima_tentativa:
+                registro.registrar()
+            if not socket.poll(100):
+                continue
             mensagem = socket.recv()
+            recebidas += 1
             recebido_em = timestamp()
             pedido = {}
             try:
@@ -249,17 +276,19 @@ def main():
                 time.sleep(pausa_visual)
                 mostrar_mensagem("RECEBENDO", pedido)
                 time.sleep(pausa_visual)
-                if not isinstance(pedido, dict):
+                try:
+                    relogio.receber(pedido)
+                except ValueError:
                     resposta = montar_resposta({}, erro="INVALID_REQUEST")
                 else:
                     try:
                         resposta = tratar_pedido(pedido, banco, publicador)
                     except (sqlite3.Error, zmq.ZMQError) as erro:
-                        print(f"Erro no banco: {erro}", flush=True)
+                        print(f"Falha ao atender pedido: {erro}", flush=True)
                         resposta = montar_resposta(pedido, erro="INTERNAL_ERROR")
             # REP precisa responder antes de receber outro pedido.
             # Atualizamos o horário depois das pausas, perto do envio.
-            resposta["timestamp"] = timestamp()
+            relogio.preparar_envio(resposta)
             # Também registramos a requisição e a resposta completas.
             try:
                 with banco:
@@ -270,8 +299,14 @@ def main():
             except sqlite3.Error as erro:
                 print(f"Falha ao registrar troca: {erro}", flush=True)
                 resposta = montar_resposta(pedido if isinstance(pedido, dict) else {}, erro="INTERNAL_ERROR")
+                relogio.preparar_envio(resposta)
             mostrar_mensagem("RESPONDENDO", resposta)
             socket.send(msgpack.packb(resposta, use_bin_type=True))
+            # Contamos pedidos recebidos deste servidor, inclusive os inválidos.
+            # Mandamos o heartbeat após responder o décimo, sem atrasar aquele REP.
+            if recebidas >= 10:
+                registro.heartbeat()
+                recebidas = 0
     except KeyboardInterrupt:
         print("Servidor encerrado.", flush=True)
     finally:

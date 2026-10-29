@@ -22,6 +22,7 @@
 #include <zmq.h>
 
 #include "protocolo.h"
+#include "referencia.h"
 
 /* Limite de caracteres (não de bytes) do texto publicado. */
 #define TAMANHO_MAXIMO_MENSAGEM 500
@@ -111,6 +112,7 @@ static void mostrar_mensagem(const char *acao, const msgpack_object *mensagem)
         {"publish", "publicar"},
     };
     const msgpack_object *operacao = buscar(mensagem, "operation");
+    const msgpack_object *clock = buscar(mensagem, "clock");
     const msgpack_object *instante = buscar(mensagem, "timestamp");
     const msgpack_object *dados = buscar(mensagem, "payload");
     const msgpack_object *status = buscar(mensagem, "status");
@@ -131,6 +133,9 @@ static void mostrar_mensagem(const char *acao, const msgpack_object *mensagem)
             imprimir_objeto(stdout, operacao, false);
         }
     }
+    fputs(" | clock: ", stdout);
+    if (clock != NULL) imprimir_objeto(stdout, clock, false);
+    else fputs("ausente", stdout);
     fputs(" | timestamp: ", stdout);
     if (instante == NULL) {
         fputs("ausente", stdout);
@@ -425,11 +430,12 @@ static int empacotar_resposta(const Resposta *resposta, int64_t instante, msgpac
     msgpack_packer pk;
     int erro = 0;
     msgpack_packer_init(&pk, buffer, msgpack_sbuffer_write);
-    erro |= msgpack_pack_map(&pk, 4);
+    erro |= msgpack_pack_map(&pk, 5);
     erro |= empacotar_texto(&pk, "operation", 9);
     erro |= empacotar_texto(&pk, resposta->operacao, resposta->tamanho_operacao);
     erro |= empacotar_texto(&pk, "timestamp", 9);
     erro |= msgpack_pack_int64(&pk, instante);
+    erro |= empacotar_clock(&pk);
     erro |= empacotar_texto(&pk, "status", 6);
     erro |= empacotar_texto(&pk, resposta->status, strlen(resposta->status));
     erro |= empacotar_texto(&pk, "payload", 7);
@@ -598,11 +604,12 @@ static void tratar_publicacao(const msgpack_object *usuario, const msgpack_objec
     msgpack_packer pk;
     int erro = 0;
     msgpack_packer_init(&pk, &evento, msgpack_sbuffer_write);
-    erro |= msgpack_pack_map(&pk, 3);
+    erro |= msgpack_pack_map(&pk, 4);
     erro |= empacotar_texto(&pk, "operation", 9);
     erro |= empacotar_texto(&pk, "publication", 11);
     erro |= empacotar_texto(&pk, "timestamp", 9);
     erro |= msgpack_pack_int64(&pk, instante_evento);
+    erro |= empacotar_clock(&pk);
     erro |= empacotar_texto(&pk, "payload", 7);
     erro |= msgpack_pack_map(&pk, 5);
     erro |= empacotar_texto(&pk, "id", 2);
@@ -727,11 +734,25 @@ static int registrar_troca(Banco *banco, const void *pedido, size_t tamanho_pedi
     return 0;
 }
 
-/* Resposta de último recurso, caso nem seja possível montar a resposta:
- * {operation: "", timestamp: 0, status: "internal_error", payload: {}}.
- * Sem ela o REP ficaria travado esperando um envio que nunca acontece. */
-static const char resposta_reserva[] =
-    "\x84\xa9operation\xa0\xa9timestamp\x00\xa6status\xaeinternal_error\xa7payload\x80";
+/* Último recurso sem alocação dinâmica, caso o buffer MessagePack falhe. */
+static size_t montar_reserva(char *buffer)
+{
+    static const unsigned char inicio[] = "\x85\xa9" "operation" "\xa0\xa9" "timestamp" "\xd3";
+    static const unsigned char meio[] = "\xa5" "clock" "\xd3";
+    static const unsigned char fim[] = "\xa6" "status" "\xae" "internal_error" "\xa7" "payload" "\x80";
+    size_t posicao = 0;
+    memcpy(buffer + posicao, inicio, sizeof inicio - 1); posicao += sizeof inicio - 1;
+    uint64_t valores[2] = {(uint64_t)timestamp_ms(), (uint64_t)relogio_enviar()};
+    for (int campo = 0; campo < 2; campo++) {
+        if (campo == 1) {
+            memcpy(buffer + posicao, meio, sizeof meio - 1); posicao += sizeof meio - 1;
+        }
+        for (int byte = 7; byte >= 0; byte--)
+            buffer[posicao++] = (char)(valores[campo] >> (byte * 8));
+    }
+    memcpy(buffer + posicao, fim, sizeof fim - 1); posicao += sizeof fim - 1;
+    return posicao;
+}
 
 static void atender(void *socket, void *publicador, Banco *banco, zmq_msg_t *mensagem)
 {
@@ -751,7 +772,7 @@ static void atender(void *socket, void *publicador, Banco *banco, zmq_msg_t *men
         pausar(pausa_visual);
         mostrar_mensagem("RECEBENDO", &pedido.data);
         pausar(pausa_visual);
-        if (pedido.data.type != MSGPACK_OBJECT_MAP) {
+        if (pedido.data.type != MSGPACK_OBJECT_MAP || relogio_receber(&pedido.data) != 0) {
             definir_erro(&resposta, "invalid_request");
         } else {
             /* A resposta repete a operação recebida, se ela for uma string. */
@@ -776,11 +797,15 @@ static void atender(void *socket, void *publicador, Banco *banco, zmq_msg_t *men
         montada = empacotar_resposta(&resposta, timestamp_ms(), &saida) == 0;
     }
 
-    const char *envio = resposta_reserva;
-    size_t tamanho_envio = sizeof resposta_reserva - 1;
+    char reserva[128];
+    const char *envio;
+    size_t tamanho_envio;
     if (montada) {
         envio = saida.data;
         tamanho_envio = saida.size;
+    } else {
+        tamanho_envio = montar_reserva(reserva);
+        envio = reserva;
     }
     mostrar_empacotada("RESPONDENDO", envio, tamanho_envio);
     while (zmq_send(socket, envio, tamanho_envio, 0) < 0 && zmq_errno() == EINTR) {
@@ -794,6 +819,7 @@ static void atender(void *socket, void *publicador, Banco *banco, zmq_msg_t *men
 
 int main(void)
 {
+    relogio_iniciar_servidor();
     /* Cada servidor pode receber um nome e um caminho de banco próprios. */
     const char *endereco_broker = ambiente("ENDERECO_BROKER", "tcp://localhost:5556");
     const char *endereco_publicacao = ambiente("ENDERECO_PUBLICACAO", "tcp://localhost:5557");
@@ -849,15 +875,25 @@ int main(void)
     printf("%s iniciado. Banco: %s\n", nome_servidor, arquivo_banco);
     fflush(stdout);
 
+    Referencia referencia = {
+        .contexto = contexto, .nome = nome_servidor,
+        .endereco = ambiente("ENDERECO_REFERENCIA", "tcp://localhost:5559"),
+        .rank = 0, .proxima_tentativa = 0
+    };
+    int prazo_recebimento = 200;
+    zmq_setsockopt(socket, ZMQ_RCVTIMEO, &prazo_recebimento, sizeof prazo_recebimento);
+    if (referencia_registrar(&referencia)) referencia_listar(&referencia);
+    int recebidas = 0;
     codigo = 0;
     while (!parar) {
+        referencia_manter(&referencia);
         /* Aqui aguardamos um pedido, sem gastar CPU consultando em loop. */
         zmq_msg_t mensagem;
         zmq_msg_init(&mensagem);
         if (zmq_msg_recv(&mensagem, socket, 0) < 0) {
             int erro = zmq_errno();
             zmq_msg_close(&mensagem);
-            if (erro == EINTR) {
+            if (erro == EINTR || erro == EAGAIN) {
                 continue;
             }
             printf("Erro ao receber: %s\n", zmq_strerror(erro));
@@ -878,6 +914,10 @@ int main(void)
         }
         atender(socket, publicador, &banco, &mensagem);
         zmq_msg_close(&mensagem);
+        if (++recebidas >= 10) {
+            referencia_heartbeat(&referencia);
+            recebidas = 0;
+        }
     }
     if (parar) {
         printf("Servidor encerrado.\n");

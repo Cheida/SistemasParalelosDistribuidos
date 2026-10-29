@@ -41,9 +41,6 @@
     </dependencies>
 
     <build>
-        <!-- O código está em src/main, e não no padrão src/main/java. -->
-        <sourceDirectory>src/main</sourceDirectory>
-
         <plugins>
 
             <plugin>
