@@ -6,9 +6,9 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src
-COPY protocolo.h protocolo.c servidor.c cliente.c ./
+COPY protocolo.h protocolo.c referencia.h referencia.c servidor.c cliente.c ./
 
-RUN gcc -std=c11 -O2 -Wall -Wextra -Werror -o servidor servidor.c protocolo.c \
+RUN gcc -std=c11 -O2 -Wall -Wextra -Werror -o servidor servidor.c protocolo.c referencia.c \
         -lzmq -lmsgpackc -lsqlite3 -luuid \
     && gcc -std=c11 -O2 -Wall -Wextra -Werror -o cliente cliente.c protocolo.c \
         -lzmq -lmsgpackc -lsqlite3 -luuid

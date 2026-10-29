@@ -12,11 +12,24 @@ services:
       - "127.0.0.1:5557:5557"
       - "127.0.0.1:5558:5558"
 
+  referencia:
+    build: ./python
+    command: ["python", "referencia.py"]
+    environment:
+      ENDERECO_REFERENCIA_BIND: tcp://*:5559
+      BANCO_REFERENCIA: /app/dados/referencia.db
+      PRAZO_HEARTBEAT: "60"
+    volumes:
+      - dados_referencia:/app/dados
+    ports:
+      - "127.0.0.1:5559:5559"
+
   servpy:
     build: ./python
     scale: 2
     environment:
       ENDERECO_BROKER: tcp://broker:5556
+      ENDERECO_REFERENCIA: tcp://referencia:5559
       ENDERECO_PUBLICACAO: tcp://proxy:5557
       ARQUIVO_BANCO: /app/dados/servpy.db
     volumes:
@@ -24,6 +37,7 @@ services:
     depends_on:
       - broker
       - proxy
+      - referencia
 
   cliente-python:
     build: ./python
@@ -41,15 +55,16 @@ services:
     build: ./Java
     scale: 2
     environment:
-      NOME_SERVIDOR: servjava
       ENDERECO_BROKER: tcp://broker:5556
+      ENDERECO_REFERENCIA: tcp://referencia:5559
       ENDERECO_PUBLICACAO: tcp://proxy:5557
       ARQUIVO_BANCO: /app/dados/servjava.db
     volumes:
-      - dados_servjava:/app/dados
+      - /app/dados
     depends_on:
       - broker
       - proxy
+      - referencia
 
   cliente-java:
     build: ./Java
@@ -68,6 +83,7 @@ services:
     scale: 2
     environment:
       ENDERECO_BROKER: tcp://broker:5556
+      ENDERECO_REFERENCIA: tcp://referencia:5559
       ENDERECO_PUBLICACAO: tcp://proxy:5557
       ARQUIVO_BANCO: /app/dados/servc.db
     volumes:
@@ -75,6 +91,7 @@ services:
     depends_on:
       - broker
       - proxy
+      - referencia
 
   cliente-c:
     build: ./C
@@ -89,5 +106,6 @@ services:
       - servc
 
 volumes:
+  dados_referencia:
   dados_servjava:
   dados_servpy:

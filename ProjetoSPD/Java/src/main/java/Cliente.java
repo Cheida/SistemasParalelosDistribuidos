@@ -97,7 +97,8 @@ public class Cliente {
                         "operation", "desconhecida"))
                 .append(" | timestamp: ")
                 .append(mensagem.getOrDefault(
-                        "timestamp", "ausente"));
+                        "timestamp", "ausente"))
+                .append(" | clock: ").append(mensagem.get("clock"));
 
         if (dados.containsKey("username")) {
             texto.append(" | usuário: ")
@@ -208,6 +209,7 @@ public class Cliente {
                     );
                 }
 
+                Protocolo.receberRelogio(evento);
                 long recebidoEm = Protocolo.timestamp();
 
                 System.out.println(
@@ -217,6 +219,8 @@ public class Cliente {
                                 + " | mensagem: " + dados.get("message")
                                 + " | envio: " + evento.get("timestamp")
                                 + " | recebimento: " + recebidoEm
+                                + " | clock recebido: " + evento.get("clock")
+                                + " | clock local: " + Protocolo.clockAtual()
                 );
 
                 if ("1".equals(
@@ -294,6 +298,7 @@ public class Cliente {
 
         try {
 
+            Protocolo.prepararEnvio(pedido);
             mostrarMensagem("ENVIANDO", pedido);
 
             byte[] pedidoBytes = Protocolo.empacotar(pedido);
@@ -342,6 +347,7 @@ public class Cliente {
                         );
                     }
 
+                    Protocolo.receberRelogio(resposta);
                     mostrarMensagem("RECEBENDO", resposta);
 
                     return resposta;

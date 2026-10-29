@@ -2,7 +2,7 @@
 
 Como cada integrante vai desenvolver em uma linguagem diferente (Python, Java e C), precisamos combinar um formato de mensagem que funcione nas três. A ideia deste documento é deixar esse padrão registrado para todo mundo seguir durante a implementação.
 
-Por enquanto, esta é uma proposta para a parte 1. Ainda precisamos confirmar as escolhas com o grupo.
+Este documento reúne o protocolo das partes 1 a 3. A parte 3 está implementada em Python, Java e C, com uma única referência compartilhada em Python.
 
 ## Como as mensagens vão ser enviadas
 
@@ -27,6 +27,7 @@ Todo pedido vai ter estes campos:
 | Campo | Tipo | Para que serve |
 |---|---|---|
 | operation | string | O que o cliente quer fazer: login, create_channel, list_channels ou publish |
+| clock | inteiro de 64 bits | Contador lógico do processo que envia |
 | timestamp | inteiro de 64 bits | Horário em que a mensagem foi enviada |
 | payload | mapa | Dados necessários para aquela operação |
 
@@ -37,6 +38,7 @@ Um pedido de login teria esta estrutura:
 ```text
 operation: "login"
 timestamp: 1792530000000
+clock: 1
 payload:
   username: "bot-python-1"
 ```
@@ -49,6 +51,7 @@ A resposta vai seguir este formato:
 | Campo | Tipo | Para que serve |
 |---|---|---|
 | operation | string | Mesma operação recebida no pedido |
+| clock | inteiro de 64 bits | Contador lógico do processo que envia |
 | timestamp | inteiro de 64 bits | Horário de envio da resposta |
 | status | string | ok quando deu certo; em caso de falha, o código do motivo em minúsculas |
 | payload | mapa | Resultado da operação. Se der erro, fica vazio |
@@ -97,7 +100,7 @@ A proposta é usar SQLite, com um banco separado para cada servidor. Os servidor
 
 Um ponto para acompanhar nos testes: como o broker distribui os pedidos, duas requisições do mesmo cliente podem chegar a servidores diferentes. Até implementarmos a replicação, os dados locais desses servidores podem ser diferentes.
 
-Nas próximas partes, vamos atualizar este documento para incluir publicações, relógios, heartbeat, eleição e replicação. Sempre que o formato mudar, precisamos combinar a alteração entre os três para manter a comunicação funcionando.
+Este documento já inclui publicações, relógios e heartbeat. Nas próximas partes, vamos acrescentar eleição e replicação. Sempre que o formato mudar, precisamos combinar a alteração entre os três para manter a comunicação funcionando.
 
 ## Como isso aparece no terminal
 
@@ -116,7 +119,7 @@ Cada socket REQ do cliente envia um pedido e aguarda sua resposta antes de ser f
 
 Os nomes sequenciais facilitam os testes e não têm mais o limite de 100. A regra de até 32 caracteres por nome continua valendo. O servidor aceita qualquer nome válido, e os canais antigos não são apagados nem renomeados automaticamente.
 
-A resposta agora possui somente operation, timestamp, status e payload. Não existe campo error: o próprio status informa o motivo da falha, por exemplo channel_exists. Em uma resposta de falha, payload é um mapa vazio.
+A resposta agora possui operation, timestamp, clock, status e payload. Não existe campo error: o próprio status informa o motivo da falha, por exemplo channel_exists. Em uma resposta de falha, payload é um mapa vazio.
 
 ## Parte 2 — publicação e inscrição
 
@@ -129,6 +132,7 @@ Usamos o mesmo envelope binário da parte 1:
 ```text
 operation: publish
 timestamp: 1792605936138
+clock: 1
 payload:
   username: bot-python-1
   channel: canal1
@@ -144,6 +148,7 @@ O servidor salva a publicação em SQLite, envia o evento no PUB e só depois re
 ```text
 operation: publish
 timestamp: 1792605936140
+clock: 3
 status: ok
 payload:
   channel: canal1
@@ -162,6 +167,7 @@ A publicação tem dois frames, ambos em MessagePack:
 ```text
 operation: publication
 timestamp: 1792605936139
+clock: 2
 payload:
   id: identificador-único-do-evento
   username: bot-python-1
@@ -179,3 +185,56 @@ Pub/Sub não confirma entrega a cada assinante. status ok significa que o servid
 ### Armazenamento
 
 Cada servidor mantém seu próprio SQLite. Além de logins e canais, a tabela publicacoes guarda o identificador, usuário, canal, texto, timestamps do pedido e da publicação e o evento MessagePack completo. A tabela trocas registra os bytes do pedido, a resposta em MessagePack e o timestamp de recebimento pelo servidor para todas as operações. As publicações são gravadas antes do envio no PUB. Não há exclusão automática nem réplica entre os bancos nesta etapa.
+
+## Parte 3 — relógios e heartbeat
+
+Todos os mapas de mensagem passam a ter o campo obrigatório `clock`, um inteiro não negativo de 64 bits. Isso vale para pedidos dos bots, respostas dos servidores, eventos publicados e pedidos/respostas da referência. O tópico do Pub/Sub é só o frame de roteamento; o contador fica no evento, e não se incrementa uma vez por frame.
+
+Cada processo começa com contador zero. Antes de enviar uma mensagem, incrementa seu contador em 1 e inclui o resultado em clock. Ao receber, atualiza o contador local para max(local, recebido), sem somar 1 nesse recebimento, conforme o enunciado. A próxima mensagem enviada avança mais uma unidade. O mesmo servidor usa um só contador para REQ/REP dos bots, publicações e comunicação com a referência.
+
+Exemplo: o bot envia clock 1, o servidor recebe e passa para pelo menos 1. Se publicar, envia o evento com clock 2; depois envia o REP com clock 3. Uma consulta à referência também pode aumentar esses valores, então eles não precisam ser consecutivos na tela do bot. Os registros mostram o contador transmitido; no recebimento de publicações, mostram também o contador local atualizado.
+
+### Serviço de referência
+
+Uma única instância em Python recebe sockets REQ dos servidores em REP na porta 5559, fora do broker. Os bots não usam essa conexão. Pedidos seguem o envelope da aplicação, com operation, timestamp, clock e payload; respostas acrescentam status. Os servidores devem usar nomes únicos entre todas as réplicas e linguagens.
+
+| operation | payload do pedido | payload da resposta de sucesso |
+|---|---|---|
+| register_server | name: string, address: string | name: string, rank: inteiro positivo |
+| list_servers | mapa vazio | servers: lista de mapas com name, rank e address |
+| heartbeat | name: string | name: string, rank: inteiro positivo |
+
+Exemplo de cadastro:
+
+```text
+operation: register_server
+timestamp: 1792605936138
+clock: 1
+payload:
+  name: servpy-a1b2c3
+  address: a1b2c3
+```
+
+O address é o hostname alcançável na rede dos containers; nesta etapa não representa uma porta de atendimento direto implementada pelo servidor. O nome do processo e seu endereço ficam associados ao rank. O mesmo nome recebe o mesmo rank e atualiza seu endereço. Os ranks ficam em SQLite próprio da referência, no volume nomeado dados_referencia. A referência mantém apenas em memória os últimos sinais de atividade; depois de reiniciá-la, a lista ativa é reconstruída com novos cadastros e heartbeats. Um nome conhecido pode voltar por heartbeat e manter seu rank.
+
+O horário correto vem no timestamp da resposta ao heartbeat, que já é obrigatório no envelope. Um heartbeat de nome nunca cadastrado recebe status server_not_registered e payload vazio; o servidor deve fazer register_server novamente. Outros status possíveis são invalid_request, invalid_name, unknown_operation e internal_error.
+
+### Contagem e disponibilidade
+
+Cada servidor conta seus próprios pedidos de clientes recebidos pelo REP, inclusive inválidos. Após responder ao décimo, envia um heartbeat e zera a contagem. Pedidos feitos à referência e eventos PUB não entram nessa conta. Não adicionamos heartbeat periódico por tempo nesta implementação.
+
+A referência remove da lista ativa nomes sem cadastro ou heartbeat nos últimos 60 segundos. Esse prazo é configurado por PRAZO_HEARTBEAT e verificado com relógio monotônico, mesmo quando não chegam pedidos. Não se apaga o rank reservado daquele nome.
+
+Como o enunciado usa heartbeat por quantidade de mensagens, um servidor vivo que fique ocioso por mais tempo que o prazo também sairá da lista. Isso é uma limitação do critério de ausência de heartbeat, não uma prova de que o processo morreu. Ajuste o prazo à carga dos testes. Ao voltar a receber dez pedidos, ele pode retornar à lista pelo heartbeat. Não há ainda eleição, heartbeat por timer ou tolerância à falha da própria referência.
+
+### Ajuste do relógio físico
+
+O servidor usa timestamp = hora do sistema + ajuste_ms. Quando recebe a resposta de heartbeat, calcula um ajuste estimando metade do tempo de ida e volta como atraso da resposta. Assim corrige apenas o relógio usado pelo processo, sem alterar o relógio do Mac ou o relógio do host Docker. É uma aproximação que supõe atrasos semelhantes nos dois sentidos, não uma sincronização exata.
+
+Para demonstrar a correção, pode-se iniciar um servidor com DESVIO_INICIAL_MS, por exemplo 60000. Depois do heartbeat, o ajuste passa a ser calculado a partir da referência. Uma correção pode fazer o timestamp físico recuar; o clock lógico continua sem diminuir.
+
+### Integração das linguagens
+
+O serviço de referência é compartilhado e foi escrito em Python. Clientes e servidores Python, Java e C usam clock no envelope. Os servidores das três linguagens cadastram nome e endereço, guardam rank, consultam a lista e enviam heartbeat com ajuste físico. Todos usam a mesma regra de incrementar ao enviar e aplicar max ao receber.
+
+O Compose inicia as três linguagens sem perfis opcionais. Cada réplica tem nome e banco próprios, incluindo Java. Mensagens sem clock são inválidas no protocolo da parte 3. O broker e o proxy não foram alterados.

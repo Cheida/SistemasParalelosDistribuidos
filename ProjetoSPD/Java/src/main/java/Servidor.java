@@ -24,6 +24,7 @@ public class Servidor {
     private Connection banco;
 
     public Servidor() {
+        Protocolo.iniciarRelogioServidor();
 
         String hostname = Protocolo.ambiente("HOSTNAME", "local");
 
@@ -413,6 +414,8 @@ public class Servidor {
                     )
             );
 
+            Protocolo.prepararEnvio(evento);
+            timestampPublicacao = ((Number) evento.get("timestamp")).longValue();
             byte[] eventoBytes = Protocolo.empacotar(evento);
 
             /*
@@ -456,6 +459,8 @@ public class Servidor {
                             + canal
                             + " | usuário: " + usuario
                             + " | mensagem: " + mensagem
+                            + " | timestamp: " + evento.get("timestamp")
+                            + " | clock: " + evento.get("clock")
             );
 
             return Protocolo.resposta(
@@ -494,6 +499,7 @@ public class Servidor {
                     contexto.createSocket(SocketType.PUB);
 
             servidor.setLinger(0);
+            servidor.setReceiveTimeOut(200);
             publicador.setLinger(0);
 
             servidor.connect(enderecoBroker);
@@ -513,9 +519,12 @@ public class Servidor {
                             + enderecoPublicacao
             );
 
+            RegistroServidor registro = new RegistroServidor(contexto, nomeServidor);
+            int recebidas = 0;
             try {
-
+                if (registro.registrar()) registro.listar();
                 while (!Thread.currentThread().isInterrupted()) {
+                    registro.manterCadastro();
 
                     /*
                      * O REP espera uma requisição.
@@ -526,6 +535,7 @@ public class Servidor {
                         continue;
                     }
 
+                    recebidas++;
                     long recebidoEm = Protocolo.timestamp();
 
                     Map<String, Object> pedido;
@@ -537,6 +547,8 @@ public class Servidor {
                                 pedidoBytes
                         );
 
+                        Protocolo.receberRelogio(pedido);
+                        System.out.println("[" + nomeServidor + "] RECEBENDO | " + pedido);
                         resposta = tratarPedido(
                                 pedido,
                                 publicador
@@ -573,6 +585,7 @@ public class Servidor {
                     /*
                      * Registra a troca antes de enviar a resposta.
                      */
+                    Protocolo.prepararEnvio(resposta);
                     byte[] respostaBytes =
                             Protocolo.empacotar(resposta);
 
@@ -598,6 +611,7 @@ public class Servidor {
                                 Protocolo.mapa()
                         );
 
+                        Protocolo.prepararEnvio(resposta);
                         respostaBytes =
                                 Protocolo.empacotar(resposta);
                     }
@@ -606,7 +620,13 @@ public class Servidor {
                      * O socket REP deve responder antes de
                      * receber a próxima requisição.
                      */
+                    System.out.println("[" + nomeServidor + "] RESPONDENDO | " + resposta);
                     servidor.send(respostaBytes, 0);
+                    // Pedidos da referência e publicações não entram nesta contagem.
+                    if (recebidas >= 10) {
+                        registro.heartbeat();
+                        recebidas = 0;
+                    }
                 }
 
             } finally {

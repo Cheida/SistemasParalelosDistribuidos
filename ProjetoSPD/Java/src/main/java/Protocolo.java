@@ -8,6 +8,37 @@ import java.util.Map;
 
 public final class Protocolo {
 
+    // Cada executável tem seu próprio contador. Ele não é compartilhado entre containers.
+    private static long contador = 0;
+    private static long ajusteMs = 0;
+
+    public static synchronized long clockAtual() {
+        return contador;
+    }
+
+    public static synchronized void prepararEnvio(Map<String, Object> mensagem) {
+        if (contador == Long.MAX_VALUE) throw new IllegalStateException("Contador esgotado");
+        mensagem.put("clock", ++contador);
+        mensagem.put("timestamp", timestamp());
+    }
+
+    public static synchronized void receberRelogio(Map<String, Object> mensagem) throws IOException {
+        if (mensagem == null || !timestampValido(mensagem.get("clock")))
+            throw new IOException("Clock ausente ou inválido");
+        // O enunciado pede max no recebimento, sem acrescentar mais 1 aqui.
+        contador = Math.max(contador, ((Number) mensagem.get("clock")).longValue());
+    }
+
+    public static void iniciarRelogioServidor() {
+        ajusteMs = Long.parseLong(ambiente("DESVIO_INICIAL_MS", "0"));
+    }
+
+    public static long sincronizar(long horaReferencia, long duracaoNanos) {
+        ajusteMs = horaReferencia + Math.round(duracaoNanos / 2_000_000.0)
+                - System.currentTimeMillis();
+        return ajusteMs;
+    }
+
     private Protocolo() {
     }
 
@@ -21,7 +52,7 @@ public final class Protocolo {
      * Retorna o timestamp em milissegundos desde Unix epoch.
      */
     public static long timestamp() {
-        return System.currentTimeMillis();
+        return System.currentTimeMillis() + ajusteMs;
     }
 
     /*
