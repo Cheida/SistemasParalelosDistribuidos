@@ -17,6 +17,8 @@ relogio = Relogio()
 tempo_resposta_ms = 5000
 intervalo_tentativas = 2
 intervalo_mensagens = 1
+# Pausa curta só para separar a resposta na tela. A espera continua ouvindo os canais.
+pausa_visual = max(0, min(float(os.getenv("PAUSA_VISUAL", "0")), 0.25))
 frases = [
     "Bom dia, pessoal!", "Alguém está por aqui?", "Teste de publicação.",
     "Mensagem enviada pelo bot.", "Tudo certo por aqui!", "Olá, canal!",
@@ -114,6 +116,7 @@ def fazer_pedido(contexto, inscrito, operacao, dados):
                         or not isinstance(resposta.get("payload"), dict)):
                     raise ValueError("Resposta fora do protocolo")
                 relogio.receber(resposta)
+                esperar(inscrito, pausa_visual)
                 mostrar_mensagem("RECEBENDO", resposta)
                 return resposta
         print(f"[{nome_bot}] Tempo de resposta esgotado.", flush=True)
