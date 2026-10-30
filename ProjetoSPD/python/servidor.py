@@ -1,4 +1,4 @@
-"""Partes 1 a 3: pedidos, publicações, persistência, relógios e heartbeat.
+"""Partes 1 a 4: mensagens, persistência, relógios, heartbeat e eleição.
 Execute na pasta do projeto: python python/servidor.py
 """
 import os
@@ -12,6 +12,7 @@ import msgpack
 import zmq
 from relogio import Relogio
 from registro import Registro
+from coordenacao import Coordenacao
 
 # Cada servidor pode receber um nome e um caminho de banco próprios.
 endereco_broker = os.getenv("ENDERECO_BROKER", "tcp://localhost:5556")
@@ -21,6 +22,7 @@ nome_padrao = f"servpy-{identificador[:12]}" if identificador else "servpy"
 nome_servidor = os.getenv("NOME_SERVIDOR", nome_padrao)
 endereco_referencia = os.getenv("ENDERECO_REFERENCIA", "tcp://localhost:5559")
 relogio = Relogio(int(os.getenv("DESVIO_INICIAL_MS", "0")))
+coordenacao = None
 endereco_publicacao = os.getenv("ENDERECO_PUBLICACAO", "tcp://localhost:5557")
 pasta_projeto = Path(__file__).resolve().parent.parent
 arquivo_banco = os.getenv(
@@ -205,22 +207,25 @@ def tratar_pedido(pedido, banco, publicador=None):
             },
         }
         # PUB e REP são envios diferentes e avançam o mesmo contador local.
-        relogio.preparar_envio(evento)
-        evento_binario = msgpack.packb(evento, use_bin_type=True)
-        # Primeiro salvamos em disco; só depois tentamos publicar.
-        with banco:
-            banco.execute(
-                """INSERT INTO publicacoes
-                (id, username, canal, mensagem, timestamp_pedido,
-                 timestamp_publicacao, evento) VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                (identificador_evento, usuario, canal, texto,
-                 pedido["timestamp"], evento["timestamp"], evento_binario),
-            )
-        # Dois frames binários: nome do tópico em MessagePack e evento.
-        # O prefixo de tamanho do MessagePack distingue canal1 de canal10.
-        publicador.send_multipart([
-            msgpack.packb(canal, use_bin_type=True), evento_binario
-        ])
+        with relogio.trava:
+            relogio.preparar_envio(evento)
+            evento_binario = msgpack.packb(evento, use_bin_type=True)
+            # Primeiro salvamos em disco; só depois tentamos publicar.
+            with banco:
+                banco.execute(
+                    """INSERT INTO publicacoes
+                    (id, username, canal, mensagem, timestamp_pedido,
+                     timestamp_publicacao, evento) VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    (identificador_evento, usuario, canal, texto,
+                     pedido["timestamp"], evento["timestamp"], evento_binario),
+                )
+            # Dois frames binários: nome do tópico em MessagePack e evento.
+            # O prefixo de tamanho do MessagePack distingue canal1 de canal10.
+            publicador.send_multipart([
+                msgpack.packb(canal, use_bin_type=True), evento_binario
+            ])
+        if coordenacao is not None:
+            coordenacao.contar_mensagem()
         mostrar_mensagem("PUBLICANDO", evento)
         return montar_resposta(pedido, {"channel": canal, "id": identificador_evento})
 
@@ -232,6 +237,7 @@ def tratar_pedido(pedido, banco, publicador=None):
 
 
 def main():
+    global coordenacao
     banco = abrir_banco()
     contexto = zmq.Context()
     # REP deve responder ao pedido atual antes de receber outro.
@@ -242,8 +248,14 @@ def main():
     print(f"{nome_servidor} iniciado. Banco: {arquivo_banco}", flush=True)
     registro = Registro(
         contexto, relogio, nome_servidor,
-        os.getenv("ENDERECO_SERVIDOR", os.getenv("HOSTNAME", "localhost")),
+        os.getenv("ENDERECO_SERVIDOR", f"tcp://{os.getenv('HOSTNAME', 'localhost')}:5560"),
         endereco_referencia,
+    )
+    coordenacao = Coordenacao(
+        contexto, relogio, registro,
+        os.getenv("ENDERECO_CONTROLE_BIND", "tcp://*:5560"),
+        endereco_publicacao,
+        os.getenv("ENDERECO_INSCRICAO", "tcp://localhost:5558"),
     )
     recebidas = 0
 
@@ -252,9 +264,12 @@ def main():
 
     signal.signal(signal.SIGTERM, encerrar)
     try:
+        coordenacao.iniciar()
         if registro.registrar():
             registro.listar()
         while True:
+            if coordenacao.erro:
+                raise RuntimeError(f"A coordenação foi interrompida: {coordenacao.erro}")
             # Se a referência iniciou depois, repetimos o cadastro sem travar o serviço.
             if registro.rank is None and time.monotonic() >= registro.proxima_tentativa:
                 registro.registrar()
@@ -262,6 +277,7 @@ def main():
                 continue
             mensagem = socket.recv()
             recebidas += 1
+            coordenacao.contar_mensagem()
             recebido_em = timestamp()
             pedido = {}
             try:
@@ -288,20 +304,22 @@ def main():
                         resposta = montar_resposta(pedido, erro="INTERNAL_ERROR")
             # REP precisa responder antes de receber outro pedido.
             # Atualizamos o horário depois das pausas, perto do envio.
-            relogio.preparar_envio(resposta)
-            # Também registramos a requisição e a resposta completas.
-            try:
-                with banco:
-                    banco.execute(
-                        "INSERT INTO trocas (pedido, resposta, timestamp_recebimento) VALUES (?, ?, ?)",
-                        (mensagem, msgpack.packb(resposta, use_bin_type=True), recebido_em),
-                    )
-            except sqlite3.Error as erro:
-                print(f"Falha ao registrar troca: {erro}", flush=True)
-                resposta = montar_resposta(pedido if isinstance(pedido, dict) else {}, erro="INTERNAL_ERROR")
+            with relogio.trava:
                 relogio.preparar_envio(resposta)
-            mostrar_mensagem("RESPONDENDO", resposta)
-            socket.send(msgpack.packb(resposta, use_bin_type=True))
+                # Também registramos a requisição e a resposta completas.
+                try:
+                    with banco:
+                        banco.execute(
+                            "INSERT INTO trocas (pedido, resposta, timestamp_recebimento) VALUES (?, ?, ?)",
+                            (mensagem, msgpack.packb(resposta, use_bin_type=True), recebido_em),
+                        )
+                except sqlite3.Error as erro:
+                    print(f"Falha ao registrar troca: {erro}", flush=True)
+                    resposta = montar_resposta(pedido if isinstance(pedido, dict) else {}, erro="INTERNAL_ERROR")
+                    relogio.preparar_envio(resposta)
+                mostrar_mensagem("RESPONDENDO", resposta)
+                socket.send(msgpack.packb(resposta, use_bin_type=True))
+            coordenacao.contar_mensagem()
             # Contamos pedidos recebidos deste servidor, inclusive os inválidos.
             # Mandamos o heartbeat após responder o décimo, sem atrasar aquele REP.
             if recebidas >= 10:
@@ -310,6 +328,7 @@ def main():
     except KeyboardInterrupt:
         print("Servidor encerrado.", flush=True)
     finally:
+        coordenacao.fechar()
         publicador.close(linger=0)
         socket.close(linger=0)
         contexto.term()
