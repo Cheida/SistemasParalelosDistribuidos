@@ -57,6 +57,7 @@ ProjetoSPD/
 │   ├── servidor.py
 │   ├── referencia.py
 │   ├── registro.py
+│   ├── coordenacao.py
 │   ├── relogio.py
 │   ├── requirements.txt
 │   └── Dockerfile
@@ -98,9 +99,9 @@ A quantidade de clientes e servidores pode ser alterada no campo `scale` de cada
 
 As implementações Python, Java e C contêm as funcionalidades das partes 1, 2 e 3: login, canais, publicações, relógios lógicos, cadastro de servidores e ranks, heartbeat e ajuste do relógio físico. O serviço de referência é compartilhado pelas três linguagens e escrito em Python.
 
-Cada linguagem tem seu cliente e servidor e usa o mesmo protocolo MessagePack. A próxima etapa será a eleição de coordenador; a replicação dos bancos ainda será feita na parte 5.
+Cada linguagem tem seu cliente e servidor e usa o mesmo protocolo MessagePack. A parte 4 (eleição e Berkeley) está implementada no servidor Python. Java e C continuam na parte 3 e ainda precisam ser adaptados pelos responsáveis. A replicação dos bancos será feita na parte 5.
 
-## Parte 3 — como testar
+## Como executar as versões atuais
 
 ```sh
 docker compose up --build
@@ -116,9 +117,23 @@ O prazo de inatividade é configurado por `PRAZO_HEARTBEAT`, inicialmente 60 seg
 
 Para simular um relógio adiantado ou atrasado, a variável `DESVIO_INICIAL_MS` do servidor aceita uma diferença em milissegundos. Os registros mostram o rank, o heartbeat, a correção física e os contadores das mensagens.
 
+## Parte 4 — Python
+
+O servidor Python escolhe o coordenador pelo maior rank que responder, usando a ideia do algoritmo Bully. Se o coordenador ficar indisponível, os demais podem iniciar nova eleição. O vencedor anuncia seu nome no tópico `servers` do proxy Pub/Sub. O broker e o proxy continuam iguais.
+
+Para sincronizar, o coordenador coleta os horários dos participantes, calcula a média das diferenças e envia correções individuais, incluindo a sua própria, seguindo Berkeley. A cada quinze mensagens de atendimento (pedidos, respostas e publicações), o servidor agenda uma sincronização. O tráfego de controle não entra nessa conta para evitar rodadas recursivas. O contador lógico continua presente em todas as mensagens.
+
+Cada servidor Python abre uma porta de controle 5560 dentro do container e cadastra o endereço completo na referência. A referência mantém cadastro, rank e heartbeat; não é mais usada pelo Python para corrigir o relógio físico. O timestamp obrigatório dos envelopes continua existindo.
+
+O mesmo `docker compose up --build` inicia tudo. Python executa as partes 1 a 4; Java e C continuam com as partes 1 a 3, sem perfis opcionais. Seus códigos não foram alterados nesta etapa. Para participar da eleição, precisam implementar as operações descritas em [docs/protocolo.md](docs/protocolo.md) e anunciar seu endereço de controle.
+
 ## Verificação da parte 3
 
 Testamos seis servidores e seis bots, sendo dois de cada linguagem, em uma rede Docker separada com bancos temporários. Conferimos ranks únicos, heartbeat, ajuste de desvios físicos simulados de 60 segundos, contadores nas requisições, respostas e publicações e gravação das trocas em cada banco. Também verificamos clientes Python, Java e C sendo atendidos por servidores das três linguagens.
+
+## Verificação da parte 4
+
+Testamos a imagem Docker com três servidores Python e bancos temporários: eleição do maior rank, anúncio no tópico servers, disparo da sincronização após quinze mensagens de atendimento, convergência para a média de Berkeley e preservação dessa média após heartbeat. Também testamos queda e retorno do coordenador, cadastro legado sem endereço de controle e um bot real publicando e recebendo mensagens durante a coordenação.
 
 ## Armazenamento e limitações atuais
 
@@ -131,3 +146,13 @@ Pub/Sub não confirma recebimento individual pelos bots. A resposta `ok` à publ
 ## Enunciado
 
 O trabalho segue as orientações do [enunciado do projeto](https://gitlab.com/laferreira/fei/cc7261/-/blob/main/projeto/enunciado.md). Este README será atualizado conforme as próximas partes forem implementadas e integradas pelo grupo.
+
+## Acompanhar a eleição sem o movimento dos bots
+
+Em um segundo terminal, na pasta do projeto, execute:
+
+```sh
+docker compose logs -f --no-color --tail 1000 servpy | grep --line-buffered -E 'ELEIÇÃO|COORDENADOR|indisponível|nome: servpy'
+```
+
+O filtro mostra o histórico recente e continua acompanhando as próximas falhas e eleições em tempo real. Mantenha esse terminal aberto antes de parar o container do coordenador. Control+C no terminal do filtro encerra apenas o acompanhamento; no terminal de docker compose up, encerra os serviços.
