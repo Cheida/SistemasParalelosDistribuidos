@@ -238,3 +238,81 @@ Para demonstrar a correção, pode-se iniciar um servidor com DESVIO_INICIAL_MS,
 O serviço de referência é compartilhado e foi escrito em Python. Clientes e servidores Python, Java e C usam clock no envelope. Os servidores das três linguagens cadastram nome e endereço, guardam rank, consultam a lista e enviam heartbeat com ajuste físico. Todos usam a mesma regra de incrementar ao enviar e aplicar max ao receber.
 
 O Compose inicia as três linguagens sem perfis opcionais. Cada réplica tem nome e banco próprios, incluindo Java. Mensagens sem clock são inválidas no protocolo da parte 3. O broker e o proxy não foram alterados.
+
+
+## Parte 4 — eleição e Berkeley (implementação Python)
+
+Esta seção substitui, nos servidores Python, a sincronização física pela referência da parte 3. A referência continua com cadastro, rank, lista e heartbeat. O timestamp continua obrigatório em todos os envelopes, inclusive no heartbeat, mas não representa mais um serviço de hora correta: o Python não usa esse timestamp para corrigir o relógio. Não há um campo de hora para sincronização na resposta de heartbeat.
+
+### Endereço direto de controle
+
+Cada servidor Python abre um REP de controle em `tcp://*:5560`, além do REP que continua conectado ao broker para os bots. No cadastro, informa um endereço alcançável como `tcp://<hostname-do-container>:5560`. Cada container pode usar a porta 5560, pois tem sua própria rede interna. Não é preciso publicar essa porta no Mac.
+
+Os servidores descobrem os outros pelo list_servers da referência. Participam da eleição e de Berkeley apenas entradas cujo address é um endereço TCP direto completo. Os endereços antigos de Java e C ainda são só hostnames e ficam fora dessa etapa. Quando essas implementações forem adaptadas, deverão anunciar um endereço REP de controle e seguir as operações abaixo; não há filtro pelo nome da linguagem.
+
+Para testes fora do Docker, podemos configurar ENDERECO_CONTROLE_BIND e ENDERECO_SERVIDOR com a porta local de cada processo. ENDERECO_INSCRICAO é a conexão com o XPUB do proxy.
+
+### Eleição pelo maior rank (Bully)
+
+1. Sem coordenador conhecido ou após detectar sua falha, o servidor envia election aos participantes conhecidos com rank maior que o seu.
+2. Cada destinatário responde ok. Se tiver rank maior que o solicitante, também inicia uma eleição.
+3. Se nenhum superior responder dentro do prazo, o servidor assume como coordenador.
+4. Se algum responder, espera o anúncio do vencedor; se o anúncio não vier, tenta novamente.
+5. O vencedor publica no tópico servers e também confirma o anúncio por REQ/REP aos participantes conhecidos.
+
+A variável coordenador armazena o nome escolhido. Um anúncio de rank menor que o próprio rank provoca nova eleição. Anúncios de rank menor que o coordenador conhecido são ignorados até a falha deste ser detectada. O coordenador repete o PUB para alcançar servidores que se inscreveram depois; essas repetições não são novas eleições.
+
+A cada dois segundos, os participantes verificam a disponibilidade do coordenador. Uma falha na checagem limpa o coordenador conhecido e inicia nova eleição. O maior rank que voltar ao grupo pode assumir novamente. Os prazos são uma escolha de implementação para testes na rede local; atrasos longos ou partições podem provocar eleições simultâneas e visões temporariamente diferentes. Este algoritmo não fornece consenso por maioria nem tolerância a partições.
+
+### Mensagens de controle
+
+Todas usam MessagePack e os campos operation, timestamp, clock e payload. As respostas acrescentam status, mantendo o contador lógico compartilhado com os pedidos dos bots e as publicações.
+
+| operation | payload do pedido | Resposta de sucesso |
+|---|---|---|
+| election | name, rank e address do candidato | name, rank e address de quem respondeu |
+| coordinator | name, rank e address do vencedor | mapa vazio |
+| coordinator_status | mapa vazio | estado do servidor e nome do coordenador |
+| clock_read | mapa vazio | estado do servidor; horário amostrado no timestamp do envelope |
+| clock_adjust | coordinator, rank, round_id, adjustment_ms | round_id confirmado |
+| clock_sync | name do servidor solicitante | coordinator, time_ms, round_id e applied |
+| server_status | mapa vazio | name, rank, coordinator, time_ms, adjustment_ms, rounds, last_round e messages_since_sync |
+
+name, address, coordinator e round_id são strings; rank, time_ms, adjustment_ms e rounds são inteiros; applied é booleano. coordinator e last_round podem ser nulos antes da primeira eleição/rodada. adjustment_ms pode ser negativo. O estado é consultado para facilitar testes e também pode ser usado nas próximas partes.
+
+O evento de anúncio no Pub/Sub usa dois frames MessagePack:
+
+1. String `servers`.
+2. Mapa com operation `coordinator`, timestamp, clock e payload com name, rank e address do vencedor.
+
+Java e C devem assinar os mesmos bytes MessagePack de `servers`, assim como já fazem com os canais da parte 2. O broker e o proxy não interpretam nem alteram esse conteúdo.
+
+### Contagem de 15 mensagens
+
+No servidor Python, contamos cada REQ de bot recebido, cada REP enviado ao bot e cada PUB enviado a um canal. Por exemplo, uma listagem troca duas mensagens e uma publicação bem-sucedida normalmente envolve três: pedido, evento e resposta. Cada grupo de quinze agenda uma sincronização. A contagem não é o valor de clock: o relógio lógico também cresce por causa do tráfego da referência e da coordenação.
+
+Não entram nessa contagem descoberta, eleição, heartbeat, verificações do coordenador e as mensagens da própria rodada de Berkeley. Isso evita que uma rodada de sincronização dispare outras rodadas apenas pelo seu próprio tráfego. O heartbeat permanece separado, a cada dez pedidos de bot recebidos.
+
+### Rodada de Berkeley
+
+O coordenador consulta clock_read dos participantes e estima a diferença de cada horário para o seu. Considera metade do tempo de ida e volta como atraso aproximado da resposta e inclui sua própria diferença como zero. Calcula a média das diferenças recebidas e envia a cada participante:
+
+```text
+correção = média das diferenças - diferença daquele participante
+```
+
+Também aplica a correção ao próprio relógio. Os nós que não responderem não entram na média. Esta versão usa média simples dos participantes alcançáveis, sem filtro estatístico de relógios discrepantes. É sincronização interna do grupo: a média pode ficar diferente de UTC, pois não há mais uma fonte externa de hora correta.
+
+Exemplo: relógios com diferenças de -60 s, +30 s e +60 s em relação ao horário real convergem aproximadamente para +10 s, a média dos três, e não para zero.
+
+Quando um participante atinge quinze mensagens, envia clock_sync ao coordenador. O coordenador executa uma rodada, envia clock_adjust aos participantes e responde com a hora resultante. applied confirma que o solicitante recebeu e confirmou seu ajuste. O solicitante não aplica a hora da resposta outra vez, pois já recebeu a correção. Se não conseguir confirmar o ajuste, recebe sync_incomplete. Um round_id repetido não aplica a mesma correção novamente.
+
+Os ajustes mudam só o relógio do programa, sem alterar o relógio do Mac ou do host Docker. O contador lógico nunca é reduzido por esses ajustes. O acesso ao relógio é protegido entre as threads de atendimento dos bots e de controle. Cada thread tem seus próprios sockets ZeroMQ.
+
+### Situação do grupo
+
+A parte 4 está implementada somente em Python, conforme a divisão solicitada. Java e C continuam na parte 3 e continuam iniciando pelo Compose, mas não participam da eleição nem da média de Berkeley até serem adaptados. A parte 4 do grupo só estará completa depois da integração dessas versões.
+
+O prazo de inatividade da referência continua valendo: servidores sem heartbeat por mais de PRAZO_HEARTBEAT saem da lista, mesmo que estejam apenas ociosos. Eleição e sincronização não implementam replicação dos canais ou mensagens; isso pertence à parte 5.
+
+Referência conceitual para a média e distribuição de correções de Berkeley: [notas de sincronização de relógios da Rutgers University](https://people.cs.rutgers.edu/~pxk/classes/417/notes/clocks.html).
