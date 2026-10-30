@@ -21,11 +21,12 @@ class Registro:
         socket.connect(self.endereco_referencia)
         pedido = {"operation": operacao, "payload": dados}
         try:
-            self.relogio.preparar_envio(pedido)
-            print(f"[{self.nome}] ENVIANDO REFERÊNCIA | operação: {operacao} | "
-                  f"timestamp: {pedido['timestamp']} | clock: {pedido['clock']}", flush=True)
-            inicio = time.monotonic()
-            socket.send(msgpack.packb(pedido, use_bin_type=True))
+            with self.relogio.trava:
+                self.relogio.preparar_envio(pedido)
+                print(f"[{self.nome}] ENVIANDO REFERÊNCIA | operação: {operacao} | "
+                      f"timestamp: {pedido['timestamp']} | clock: {pedido['clock']}", flush=True)
+                inicio = time.monotonic()
+                socket.send(msgpack.packb(pedido, use_bin_type=True))
             if not socket.poll(1000):
                 print(f"[{self.nome}] Referência sem resposta; tentaremos novamente.", flush=True)
                 return None
@@ -73,12 +74,12 @@ class Registro:
         resultado = self.pedir("heartbeat", {"name": self.nome})
         if resultado is None:
             return
-        resposta, duracao = resultado
+        resposta, _ = resultado
         if resposta["status"] == "server_not_registered":
             self.rank = None
             self.registrar()
         elif resposta["status"] == "ok":
-            # A referência manda a hora correta no timestamp da resposta.
-            ajuste = self.relogio.sincronizar(resposta["timestamp"], duracao)
+            # Na parte 4, referência só mantém cadastro e disponibilidade.
+            # A correção física vem do coordenador eleito, via Berkeley.
             print(f"[{self.nome}] HEARTBEAT | rank: {self.rank} | "
-                  f"ajuste físico: {ajuste}ms | clock local: {self.relogio.contador}", flush=True)
+                  f"clock local: {self.relogio.contador}", flush=True)
