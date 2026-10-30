@@ -28,9 +28,13 @@ services:
     build: ./python
     scale: 2
     environment:
+      # Pausa de apresentação; não altera o intervalo de 1s das publicações.
+      PAUSA_VISUAL: "0.20"
       ENDERECO_BROKER: tcp://broker:5556
       ENDERECO_REFERENCIA: tcp://referencia:5559
       ENDERECO_PUBLICACAO: tcp://proxy:5557
+      ENDERECO_INSCRICAO: tcp://proxy:5558
+      ENDERECO_CONTROLE_BIND: tcp://*:5560
       ARQUIVO_BANCO: /app/dados/servpy.db
     volumes:
       - /app/dados
@@ -44,6 +48,8 @@ services:
     scale: 2
     command: ["python", "cliente.py"]
     environment:
+      # Pausa de apresentação; não altera o intervalo de 1s das publicações.
+      PAUSA_VISUAL: "0.20"
       ENDERECO_BROKER: tcp://broker:5555
       ENDERECO_INSCRICAO: tcp://proxy:5558
     depends_on:
