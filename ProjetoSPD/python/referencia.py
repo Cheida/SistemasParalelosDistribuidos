@@ -1,4 +1,4 @@
-"""Referência de ranks, servidores disponíveis e horário na parte 3.
+"""Referência de ranks e disponibilidade. Na parte 4, não sincroniza relógios.
 Só os servidores usam esse serviço. Execute: python python/referencia.py
 """
 import os
@@ -83,7 +83,8 @@ def tratar_pedido(pedido, banco, ativos):
         # Isso permite ao servidor perceber que precisa se registrar de novo.
         return {}, "server_not_registered"
     ativos[nome] = agora
-    # A hora correta será o timestamp do envelope da resposta, gerado no envio.
+    # O timestamp do envelope continua obrigatório, mas não é fonte de sincronização.
+    # Quem fornece o horário sincronizado agora é o coordenador eleito.
     return {"name": nome, "rank": linha[0]}, "ok"
 
 
