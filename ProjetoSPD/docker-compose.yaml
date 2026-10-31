@@ -1,87 +1,119 @@
-import org.zeromq.SocketType;
-import org.zeromq.ZContext;
-import org.zeromq.ZMQ;
-import java.io.IOException;
-import java.util.Map;
+services:
+  broker:
+    build: ./infra
+    ports:
+      - "127.0.0.1:5555:5555"
+      - "127.0.0.1:5556:5556"
 
-/* Cadastro e heartbeat usam uma conexão separada dos pedidos dos bots. */
-public class RegistroServidor {
-    private final ZContext contexto;
-    private final String nome;
-    private final String endereco;
-    private volatile long rank = 0;
-    private long proximaTentativa = 0;
+  proxy:
+    build: ./infra
+    command: ["python", "proxy.py"]
+    ports:
+      - "127.0.0.1:5557:5557"
+      - "127.0.0.1:5558:5558"
 
-    public RegistroServidor(ZContext contexto, String nome) {
-        this.contexto = contexto;
-        this.nome = nome;
-        this.endereco = Protocolo.ambiente("ENDERECO_REFERENCIA", "tcp://localhost:5559");
-    }
+  referencia:
+    build: ./python
+    command: ["python", "referencia.py"]
+    environment:
+      ENDERECO_REFERENCIA_BIND: tcp://*:5559
+      BANCO_REFERENCIA: /app/dados/referencia.db
+      PRAZO_HEARTBEAT: "60"
+    volumes:
+      - dados_referencia:/app/dados
+    ports:
+      - "127.0.0.1:5559:5559"
 
-    private Map<String, Object> pedir(String operacao, Map<String, Object> dados) {
-        ZMQ.Socket socket = contexto.createSocket(SocketType.REQ);
-        socket.setLinger(0);
-        socket.setSendTimeOut(1000);
-        socket.setReceiveTimeOut(1000);
-        socket.connect(endereco);
-        try {
-            Map<String, Object> pedido = Protocolo.mapa("operation", operacao, "payload", dados);
-            Protocolo.prepararEnvio(pedido);
-            long inicio = System.nanoTime();
-            if (!socket.send(Protocolo.empacotar(pedido), 0)) return null;
-            byte[] bytes = socket.recv(0);
-            long duracao = System.nanoTime() - inicio;
-            if (bytes == null) return null;
-            Map<String, Object> resposta = Protocolo.desempacotarMapa(bytes);
-            Protocolo.receberRelogio(resposta);
-            if (!operacao.equals(resposta.get("operation"))
-                    || !Protocolo.timestampValido(resposta.get("timestamp"))
-                    || !(resposta.get("status") instanceof String)
-                    || Protocolo.comoMapa(resposta.get("payload")) == null) return null;
-            System.out.println("[" + nome + "] REFERÊNCIA | " + operacao
-                    + " | clock: " + resposta.get("clock") + " | status: " + resposta.get("status"));
-            return resposta;
-        } catch (IOException | RuntimeException e) {
-            System.out.println("[" + nome + "] Referência indisponível: " + e.getMessage());
-            return null;
-        } finally {
-            socket.close();
-        }
-    }
+  servpy:
+    build: ./python
+    scale: 2
+    environment:
+      # Pausa de apresentação; não altera o intervalo de 1s das publicações.
+      PAUSA_VISUAL: "0.20"
+      ENDERECO_BROKER: tcp://broker:5556
+      ENDERECO_REFERENCIA: tcp://referencia:5559
+      ENDERECO_PUBLICACAO: tcp://proxy:5557
+      ENDERECO_INSCRICAO: tcp://proxy:5558
+      ENDERECO_CONTROLE_BIND: tcp://*:5560
+      ARQUIVO_BANCO: /app/dados/servpy.db
+    volumes:
+      - /app/dados
+    depends_on:
+      - broker
+      - proxy
+      - referencia
 
-    public String nome() { return nome; }
-    public long rank() { return rank; }
-    public String enderecoReferencia() { return endereco; }
-    public String enderecoServidor() { return Protocolo.ambiente("ENDERECO_SERVIDOR", "tcp://" + Protocolo.ambiente("HOSTNAME", "localhost") + ":5560"); }
+  cliente-python:
+    build: ./python
+    scale: 2
+    command: ["python", "cliente.py"]
+    environment:
+      # Pausa de apresentação; não altera o intervalo de 1s das publicações.
+      PAUSA_VISUAL: "0.20"
+      ENDERECO_BROKER: tcp://broker:5555
+      ENDERECO_INSCRICAO: tcp://proxy:5558
+    depends_on:
+      - broker
+      - proxy
+      - servpy
 
-    public boolean registrar() {
-        proximaTentativa = System.nanoTime() + 2_000_000_000L;
-        Map<String, Object> resposta = pedir("register_server", Protocolo.mapa(
-                "name", nome, "address", enderecoServidor()));
-        if (resposta == null || !"ok".equals(resposta.get("status"))) return false;
-        Object valor = Protocolo.comoMapa(resposta.get("payload")).get("rank");
-        if (!Protocolo.timestampValido(valor) || ((Number) valor).longValue() < 1) return false;
-        rank = ((Number) valor).longValue();
-        System.out.println("[" + nome + "] REGISTRADO | rank: " + rank);
-        return true;
-    }
+  servjava:
+    build: ./Java
+    scale: 2
+    environment:
+      ENDERECO_BROKER: tcp://broker:5556
+      ENDERECO_REFERENCIA: tcp://referencia:5559
+      ENDERECO_PUBLICACAO: tcp://proxy:5557
+      ENDERECO_INSCRICAO: tcp://proxy:5558
+      ENDERECO_CONTROLE_BIND: tcp://*:5560
+      ARQUIVO_BANCO: /app/dados/servjava.db
+    volumes:
+      - /app/dados
+    depends_on:
+      - broker
+      - proxy
+      - referencia
 
-    public void manterCadastro() {
-        if (rank == 0 && System.nanoTime() >= proximaTentativa) registrar();
-    }
+  cliente-java:
+    build: ./Java
+    scale: 2
+    command: ["java", "-cp", "target/classes:target/lib/*", "Cliente"]
+    environment:
+      ENDERECO_BROKER: tcp://broker:5555
+      ENDERECO_INSCRICAO: tcp://proxy:5558
+    depends_on:
+      - broker
+      - proxy
+      - servjava
 
-    public void listar() {
-        Map<String, Object> resposta = pedir("list_servers", Protocolo.mapa());
-        if (resposta != null && "ok".equals(resposta.get("status")))
-            System.out.println("[" + nome + "] SERVIDORES | " + resposta.get("payload"));
-    }
+  servc:
+    build: ./C
+    scale: 2
+    environment:
+      ENDERECO_BROKER: tcp://broker:5556
+      ENDERECO_REFERENCIA: tcp://referencia:5559
+      ENDERECO_PUBLICACAO: tcp://proxy:5557
+      ARQUIVO_BANCO: /app/dados/servc.db
+    volumes:
+      - /app/dados
+    depends_on:
+      - broker
+      - proxy
+      - referencia
 
-    public void heartbeat() {
-        if (rank == 0 && !registrar()) return;
-        Map<String, Object> resposta = pedir("heartbeat", Protocolo.mapa("name", nome));
-        if (resposta != null && "server_not_registered".equals(resposta.get("status"))) {
-            rank = 0;
-            registrar();
-        }
-    }
-}
+  cliente-c:
+    build: ./C
+    scale: 2
+    command: ["./cliente"]
+    environment:
+      ENDERECO_BROKER: tcp://broker:5555
+      ENDERECO_INSCRICAO: tcp://proxy:5558
+    depends_on:
+      - broker
+      - proxy
+      - servc
+
+volumes:
+  dados_referencia:
+  dados_servjava:
+  dados_servpy:
