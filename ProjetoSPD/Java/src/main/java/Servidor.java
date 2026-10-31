@@ -22,6 +22,7 @@ public class Servidor {
     private final String arquivoBanco;
 
     private Connection banco;
+    private Coordenacao coordenacao;
 
     public Servidor() {
         Protocolo.iniciarRelogioServidor();
@@ -171,9 +172,6 @@ public class Servidor {
                 ? (String) operacaoObjeto
                 : "";
 
-        /*
-         * Validamos os campos obrigatórios do envelope.
-         */
         if (!pedido.containsKey("operation")
                 || !pedido.containsKey("timestamp")
                 || !pedido.containsKey("payload")) {
@@ -203,9 +201,6 @@ public class Servidor {
         Map<String, Object> dados =
                 Protocolo.comoMapa(pedido.get("payload"));
 
-        /*
-         * LOGIN, CREATE_CHANNEL e PUBLISH precisam de username.
-         */
         String usuario = null;
 
         if (operacao.equals("login")
@@ -304,9 +299,6 @@ public class Servidor {
 
             } catch (SQLException e) {
 
-                /*
-                 * A chave primária impede canais duplicados.
-                 */
                 if (canalExiste(canal)) {
                     return Protocolo.resposta(
                             operacao,
@@ -392,12 +384,6 @@ public class Servidor {
                 );
             }
 
-            /*
-             * Não exigimos que o canal exista no banco local.
-             *
-             * O broker pode encaminhar o pedido a um servidor
-             * diferente daquele que criou o canal.
-             */
             String idEvento = UUID.randomUUID().toString();
 
             long timestampPublicacao = Protocolo.timestamp();
@@ -418,9 +404,6 @@ public class Servidor {
             timestampPublicacao = ((Number) evento.get("timestamp")).longValue();
             byte[] eventoBytes = Protocolo.empacotar(evento);
 
-            /*
-             * Primeiro persistimos a publicação.
-             */
             String sql = """
                 INSERT INTO publicacoes
                 (id, username, canal, mensagem,
@@ -453,6 +436,7 @@ public class Servidor {
 
             publicador.send(topicoBytes, ZMQ.SNDMORE);
             publicador.send(eventoBytes, 0);
+            coordenacao.contarMensagem();
 
             System.out.println(
                     "[" + nomeServidor + "] PUBLICAÇÃO | canal: "
@@ -473,9 +457,6 @@ public class Servidor {
             );
         }
 
-        /*
-         * Operação desconhecida.
-         */
         return Protocolo.resposta(
                 operacao,
                 "unknown_operation",
@@ -521,20 +502,20 @@ public class Servidor {
 
             RegistroServidor registro = new RegistroServidor(contexto, nomeServidor);
             int recebidas = 0;
+            coordenacao = new Coordenacao(contexto, registro);
             try {
+                coordenacao.iniciar();
                 if (registro.registrar()) registro.listar();
                 while (!Thread.currentThread().isInterrupted()) {
                     registro.manterCadastro();
 
-                    /*
-                     * O REP espera uma requisição.
-                     */
                     byte[] pedidoBytes = servidor.recv(0);
 
                     if (pedidoBytes == null) {
                         continue;
                     }
 
+                    coordenacao.contarMensagem();
                     recebidas++;
                     long recebidoEm = Protocolo.timestamp();
 
@@ -556,9 +537,6 @@ public class Servidor {
 
                     } catch (IOException e) {
 
-                        /*
-                         * Não foi possível decodificar a mensagem.
-                         */
                         pedido = Protocolo.mapa();
 
                         resposta = Protocolo.resposta(
@@ -582,9 +560,6 @@ public class Servidor {
                         );
                     }
 
-                    /*
-                     * Registra a troca antes de enviar a resposta.
-                     */
                     Protocolo.prepararEnvio(resposta);
                     byte[] respostaBytes =
                             Protocolo.empacotar(resposta);
@@ -616,13 +591,10 @@ public class Servidor {
                                 Protocolo.empacotar(resposta);
                     }
 
-                    /*
-                     * O socket REP deve responder antes de
-                     * receber a próxima requisição.
-                     */
                     System.out.println("[" + nomeServidor + "] RESPONDENDO | " + resposta);
                     servidor.send(respostaBytes, 0);
-                    // Pedidos da referência e publicações não entram nesta contagem.
+                    coordenacao.contarMensagem();
+                    
                     if (recebidas >= 10) {
                         registro.heartbeat();
                         recebidas = 0;
@@ -631,6 +603,7 @@ public class Servidor {
 
             } finally {
 
+                coordenacao.close();
                 servidor.close();
                 publicador.close();
             }

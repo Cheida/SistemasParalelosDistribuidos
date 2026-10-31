@@ -64,6 +64,8 @@ services:
       ENDERECO_BROKER: tcp://broker:5556
       ENDERECO_REFERENCIA: tcp://referencia:5559
       ENDERECO_PUBLICACAO: tcp://proxy:5557
+      ENDERECO_INSCRICAO: tcp://proxy:5558
+      ENDERECO_CONTROLE_BIND: tcp://*:5560
       ARQUIVO_BANCO: /app/dados/servjava.db
     volumes:
       - /app/dados

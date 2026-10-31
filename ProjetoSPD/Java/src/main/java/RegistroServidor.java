@@ -9,7 +9,7 @@ public class RegistroServidor {
     private final ZContext contexto;
     private final String nome;
     private final String endereco;
-    private long rank = 0;
+    private volatile long rank = 0;
     private long proximaTentativa = 0;
 
     public RegistroServidor(ZContext contexto, String nome) {
@@ -40,12 +40,6 @@ public class RegistroServidor {
                     || Protocolo.comoMapa(resposta.get("payload")) == null) return null;
             System.out.println("[" + nome + "] REFERÊNCIA | " + operacao
                     + " | clock: " + resposta.get("clock") + " | status: " + resposta.get("status"));
-            if ("heartbeat".equals(operacao) && "ok".equals(resposta.get("status"))) {
-                // A hora correta está no timestamp da resposta, como no Python e C.
-                long ajuste = Protocolo.sincronizar(((Number) resposta.get("timestamp")).longValue(), duracao);
-                System.out.println("[" + nome + "] HEARTBEAT | rank: " + rank
-                        + " | ajuste físico: " + ajuste + "ms | clock: " + Protocolo.clockAtual());
-            }
             return resposta;
         } catch (IOException | RuntimeException e) {
             System.out.println("[" + nome + "] Referência indisponível: " + e.getMessage());
@@ -55,11 +49,15 @@ public class RegistroServidor {
         }
     }
 
+    public String nome() { return nome; }
+    public long rank() { return rank; }
+    public String enderecoReferencia() { return endereco; }
+    public String enderecoServidor() { return Protocolo.ambiente("ENDERECO_SERVIDOR", "tcp://" + Protocolo.ambiente("HOSTNAME", "localhost") + ":5560"); }
+
     public boolean registrar() {
         proximaTentativa = System.nanoTime() + 2_000_000_000L;
         Map<String, Object> resposta = pedir("register_server", Protocolo.mapa(
-                "name", nome, "address", Protocolo.ambiente("ENDERECO_SERVIDOR",
-                        Protocolo.ambiente("HOSTNAME", "localhost"))));
+                "name", nome, "address", enderecoServidor()));
         if (resposta == null || !"ok".equals(resposta.get("status"))) return false;
         Object valor = Protocolo.comoMapa(resposta.get("payload")).get("rank");
         if (!Protocolo.timestampValido(valor) || ((Number) valor).longValue() < 1) return false;
