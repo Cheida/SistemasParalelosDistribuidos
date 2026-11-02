@@ -25,7 +25,6 @@ public final class Protocolo {
     public static synchronized void receberRelogio(Map<String, Object> mensagem) throws IOException {
         if (mensagem == null || !timestampValido(mensagem.get("clock")))
             throw new IOException("Clock ausente ou inválido");
-        // O enunciado pede max no recebimento, sem acrescentar mais 1 aqui.
         contador = Math.max(contador, ((Number) mensagem.get("clock")).longValue());
     }
 
@@ -39,32 +38,25 @@ public final class Protocolo {
         return ajusteMs;
     }
 
+    public static synchronized void aplicarAjuste(long delta) { ajusteMs += delta; }
+    public static synchronized long ajusteAtual() { return ajusteMs; }
+
     private Protocolo() {
     }
 
-    /*
-     * O mesmo formato MessagePack utilizado na implementação Python.
-     */
+
     public static final ObjectMapper MAPPER =
             new ObjectMapper(new MessagePackFactory());
 
-    /*
-     * Retorna o timestamp em milissegundos desde Unix epoch.
-     */
-    public static long timestamp() {
+
+    public static synchronized long timestamp() {
         return System.currentTimeMillis() + ajusteMs;
     }
 
-    /*
-     * Serializa uma estrutura Java em bytes MessagePack.
-     */
     public static byte[] empacotar(Object objeto) throws IOException {
         return MAPPER.writeValueAsBytes(objeto);
     }
 
-    /*
-     * Desserializa uma mensagem MessagePack em um mapa.
-     */
     public static Map<String, Object> desempacotarMapa(byte[] bytes)
             throws IOException {
 
@@ -75,9 +67,7 @@ public final class Protocolo {
         );
     }
 
-    /*
-     * Cria mapas preservando a ordem de inserção.
-     */
+
     public static Map<String, Object> mapa(Object... pares) {
 
         if (pares.length % 2 != 0) {
@@ -112,9 +102,7 @@ public final class Protocolo {
         return null;
     }
 
-    /*
-     * Lê uma variável de ambiente ou utiliza o valor padrão.
-     */
+
     public static String ambiente(
             String nome,
             String valorPadrao
