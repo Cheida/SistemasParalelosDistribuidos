@@ -15,7 +15,8 @@ int64_t relogio_atual(void);
 int64_t relogio_enviar(void);
 int relogio_receber(const msgpack_object *mensagem);
 void relogio_iniciar_servidor(void);
-int64_t relogio_sincronizar(int64_t referencia, double duracao);
+void relogio_aplicar_ajuste(int64_t delta);
+int64_t relogio_ajuste_atual(void);
 int empacotar_clock(msgpack_packer *pk);
 
 double agora_monotonico(void);
