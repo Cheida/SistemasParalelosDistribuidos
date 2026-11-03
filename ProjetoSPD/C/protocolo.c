@@ -3,22 +3,34 @@
 #include "protocolo.h"
 
 #include <math.h>
+#include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
 
 static int64_t contador = 0;
 static int64_t ajuste_ms = 0;
+/* Parte 4: o relógio é usado pelo laço principal e pelas threads da coordenação. */
+static pthread_mutex_t trava_relogio = PTHREAD_MUTEX_INITIALIZER;
 
-int64_t relogio_atual(void) { return contador; }
+int64_t relogio_atual(void)
+{
+    pthread_mutex_lock(&trava_relogio);
+    int64_t valor = contador;
+    pthread_mutex_unlock(&trava_relogio);
+    return valor;
+}
 
 int64_t relogio_enviar(void)
 {
+    pthread_mutex_lock(&trava_relogio);
     if (contador == INT64_MAX) {
         fputs("Contador lógico esgotado.\n", stderr);
         exit(EXIT_FAILURE);
     }
-    return ++contador;
+    int64_t valor = ++contador;
+    pthread_mutex_unlock(&trava_relogio);
+    return valor;
 }
 
 int relogio_receber(const msgpack_object *mensagem)
@@ -27,20 +39,33 @@ int relogio_receber(const msgpack_object *mensagem)
     if (clock == NULL || clock->type != MSGPACK_OBJECT_POSITIVE_INTEGER ||
         clock->via.u64 > INT64_MAX) return -1;
     /* Não somamos 1 ao receber: essa é a regra do enunciado. */
+    pthread_mutex_lock(&trava_relogio);
     if ((int64_t)clock->via.u64 > contador) contador = (int64_t)clock->via.u64;
+    pthread_mutex_unlock(&trava_relogio);
     return 0;
 }
 
 void relogio_iniciar_servidor(void)
 {
+    pthread_mutex_lock(&trava_relogio);
     ajuste_ms = strtoll(ambiente("DESVIO_INICIAL_MS", "0"), NULL, 10);
+    pthread_mutex_unlock(&trava_relogio);
 }
 
-int64_t relogio_sincronizar(int64_t referencia, double duracao)
+/* Berkeley: soma a correção enviada pelo coordenador. */
+void relogio_aplicar_ajuste(int64_t delta)
 {
-    int64_t hora_sistema = timestamp_ms() - ajuste_ms;
-    ajuste_ms = referencia + (int64_t)(duracao * 500.0 + 0.5) - hora_sistema;
-    return ajuste_ms;
+    pthread_mutex_lock(&trava_relogio);
+    ajuste_ms += delta;
+    pthread_mutex_unlock(&trava_relogio);
+}
+
+int64_t relogio_ajuste_atual(void)
+{
+    pthread_mutex_lock(&trava_relogio);
+    int64_t valor = ajuste_ms;
+    pthread_mutex_unlock(&trava_relogio);
+    return valor;
 }
 
 int empacotar_clock(msgpack_packer *pk)
@@ -54,7 +79,7 @@ int64_t timestamp_ms(void)
 {
     struct timespec agora;
     clock_gettime(CLOCK_REALTIME, &agora);
-    return (int64_t)agora.tv_sec * 1000 + agora.tv_nsec / 1000000 + ajuste_ms;
+    return (int64_t)agora.tv_sec * 1000 + agora.tv_nsec / 1000000 + relogio_ajuste_atual();
 }
 
 double agora_monotonico(void)
