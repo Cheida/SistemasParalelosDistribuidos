@@ -3,6 +3,7 @@ Execute na pasta do projeto: python python/servidor.py
 """
 import os
 import signal
+import threading
 import uuid
 import re
 import sqlite3
@@ -13,6 +14,7 @@ import zmq
 from relogio import Relogio
 from registro import Registro
 from coordenacao import Coordenacao
+import replicacao
 
 # Cada servidor pode receber um nome e um caminho de banco próprios.
 endereco_broker = os.getenv("ENDERECO_BROKER", "tcp://localhost:5556")
@@ -264,6 +266,8 @@ def main():
 
     signal.signal(signal.SIGTERM, encerrar)
     try:
+        # A réplica usa outra conexão SQLite e outra porta, sem bloquear o REP dos bots.
+        threading.Thread(target=replicacao.main, daemon=True, name="replicacao").start()
         coordenacao.iniciar()
         if registro.registrar():
             registro.listar()
