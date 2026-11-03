@@ -1,7 +1,7 @@
 /* Recebe pedidos em MessagePack e salva logins, canais e publicações em SQLite.
  * Versão em C do python/servidor.py. Compile na pasta C:
- *   gcc -std=c11 -Wall -Wextra -o servidor servidor.c protocolo.c \
- *       -lzmq -lmsgpackc -lsqlite3 -luuid
+ *   gcc -std=c11 -Wall -Wextra -pthread -o servidor servidor.c protocolo.c referencia.c \
+ *       coordenacao.c -lzmq -lmsgpackc -lsqlite3 -luuid -lm
  */
 #define _POSIX_C_SOURCE 200809L
 
@@ -22,6 +22,7 @@
 #include <zmq.h>
 
 #include "protocolo.h"
+#include "coordenacao.h"
 #include "referencia.h"
 
 /* Limite de caracteres (não de bytes) do texto publicado. */
@@ -655,6 +656,7 @@ static void tratar_publicacao(const msgpack_object *usuario, const msgpack_objec
         definir_erro(resposta, "internal_error");
         goto fim;
     }
+    coordenacao_contar_mensagem();
     mostrar_empacotada("PUBLICANDO", evento.data, evento.size);
     resposta->tipo = DADOS_PUBLICACAO;
     resposta->texto = canal->via.str.ptr;
@@ -875,13 +877,14 @@ int main(void)
     printf("%s iniciado. Banco: %s\n", nome_servidor, arquivo_banco);
     fflush(stdout);
 
-    Referencia referencia = {
-        .contexto = contexto, .nome = nome_servidor,
-        .endereco = ambiente("ENDERECO_REFERENCIA", "tcp://localhost:5559"),
-        .rank = 0, .proxima_tentativa = 0
-    };
+    static Referencia referencia;
+    referencia_iniciar(&referencia, contexto, nome_servidor);
     int prazo_recebimento = 200;
     zmq_setsockopt(socket, ZMQ_RCVTIMEO, &prazo_recebimento, sizeof prazo_recebimento);
+    if (coordenacao_iniciar(contexto, &referencia) != 0) {
+        printf("Não foi possível iniciar a coordenação.\n");
+        goto fim;
+    }
     if (referencia_registrar(&referencia)) referencia_listar(&referencia);
     int recebidas = 0;
     codigo = 0;
@@ -912,7 +915,9 @@ int main(void)
             mais = zmq_msg_more(&extra);
             zmq_msg_close(&extra);
         }
+        coordenacao_contar_mensagem();
         atender(socket, publicador, &banco, &mensagem);
+        coordenacao_contar_mensagem();
         zmq_msg_close(&mensagem);
         if (++recebidas >= 10) {
             referencia_heartbeat(&referencia);
@@ -925,6 +930,7 @@ int main(void)
 
 fim:
     fflush(stdout);
+    coordenacao_encerrar();
     if (publicador != NULL) {
         int zero = 0;
         zmq_setsockopt(publicador, ZMQ_LINGER, &zero, sizeof zero);
