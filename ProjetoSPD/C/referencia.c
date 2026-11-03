@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 #include "referencia.h"
+#include <stdlib.h>
 #include <string.h>
 #include <zmq.h>
 
@@ -38,15 +39,12 @@ static int pedir(Referencia *ref, const char *operacao)
         erro |= empacotar_texto(&pk, ref->nome, strlen(ref->nome));
     }
     if (cadastro) {
-        const char *host = ambiente("ENDERECO_SERVIDOR", ambiente("HOSTNAME", "localhost"));
         erro |= empacotar_texto(&pk, "address", 7);
-        erro |= empacotar_texto(&pk, host, strlen(host));
+        erro |= empacotar_texto(&pk, ref->endereco_servidor, strlen(ref->endereco_servidor));
     }
     if (erro) goto fim;
-    double inicio = agora_monotonico();
     if (zmq_send(socket, pedido.data, pedido.size, 0) < 0 ||
         zmq_msg_recv(&mensagem, socket, 0) < 0) goto fim;
-    double duracao = agora_monotonico() - inicio;
     if (decodificar(zmq_msg_data(&mensagem), zmq_msg_size(&mensagem), &resposta) != 0 ||
         relogio_receber(&resposta.data) != 0 ||
         !texto_igual(buscar(&resposta.data, "operation"), operacao)) goto fim;
@@ -72,12 +70,9 @@ static int pedir(Referencia *ref, const char *operacao)
             printf("[%s] REGISTRADO | rank: %lld | clock: %lld\n", ref->nome,
                    (long long)ref->rank, (long long)relogio_atual());
         } else {
-            const msgpack_object *hora = buscar(&resposta.data, "timestamp");
-            if (hora == NULL || hora->type != MSGPACK_OBJECT_POSITIVE_INTEGER ||
-                hora->via.u64 > INT64_MAX) goto fim;
-            int64_t ajuste = relogio_sincronizar((int64_t)hora->via.u64, duracao);
-            printf("[%s] HEARTBEAT | rank: %lld | ajuste físico: %lldms | clock: %lld\n",
-                   ref->nome, (long long)ref->rank, (long long)ajuste, (long long)relogio_atual());
+            /* Parte 4: a hora vem do coordenador, não do heartbeat. */
+            printf("[%s] HEARTBEAT | rank: %lld | clock: %lld\n",
+                   ref->nome, (long long)ref->rank, (long long)relogio_atual());
         }
     }
     resultado = 0;
@@ -89,6 +84,22 @@ fim:
     msgpack_sbuffer_destroy(&pedido);
     zmq_close(socket);
     return resultado;
+}
+
+void referencia_iniciar(Referencia *ref, void *contexto, const char *nome)
+{
+    ref->contexto = contexto;
+    ref->nome = nome;
+    ref->endereco = ambiente("ENDERECO_REFERENCIA", "tcp://localhost:5559");
+    ref->rank = 0;
+    ref->proxima_tentativa = 0;
+    /* Parte 4: anunciamos o REP de controle para eleição e Berkeley. */
+    const char *fixo = getenv("ENDERECO_SERVIDOR");
+    if (fixo != NULL && fixo[0] != '\0')
+        snprintf(ref->endereco_servidor, sizeof ref->endereco_servidor, "%s", fixo);
+    else
+        snprintf(ref->endereco_servidor, sizeof ref->endereco_servidor, "tcp://%s:5560",
+                 ambiente("HOSTNAME", "localhost"));
 }
 
 bool referencia_registrar(Referencia *ref)
