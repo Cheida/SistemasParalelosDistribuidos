@@ -98,6 +98,8 @@ services:
       ENDERECO_PUBLICACAO: tcp://proxy:5557
       ENDERECO_INSCRICAO: tcp://proxy:5558
       ENDERECO_CONTROLE_BIND: tcp://*:5560
+      ENDERECO_REPLICA_BIND: tcp://*:5561
+      INTERVALO_REPLICA: "1"
       ARQUIVO_BANCO: /app/dados/servc.db
     volumes:
       - /app/dados
