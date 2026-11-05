@@ -6,10 +6,10 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src
-COPY protocolo.h protocolo.c referencia.h referencia.c coordenacao.h coordenacao.c servidor.c cliente.c ./
+COPY protocolo.h protocolo.c referencia.h referencia.c coordenacao.h coordenacao.c replicacao.h replicacao.c servidor.c cliente.c ./
 
 RUN gcc -std=c11 -O2 -Wall -Wextra -Werror -pthread -o servidor servidor.c protocolo.c \
-        referencia.c coordenacao.c -lzmq -lmsgpackc -lsqlite3 -luuid -lm \
+        referencia.c coordenacao.c replicacao.c -lzmq -lmsgpackc -lsqlite3 -luuid -lm \
     && gcc -std=c11 -O2 -Wall -Wextra -Werror -pthread -o cliente cliente.c protocolo.c \
         -lzmq -lmsgpackc -lsqlite3 -luuid
 

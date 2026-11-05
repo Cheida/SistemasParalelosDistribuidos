@@ -23,6 +23,7 @@
 
 #include "protocolo.h"
 #include "coordenacao.h"
+#include "replicacao.h"
 #include "referencia.h"
 
 /* Limite de caracteres (não de bytes) do texto publicado. */
@@ -356,6 +357,9 @@ static int abrir_banco(Banco *banco, const char *arquivo)
         banco->conexao = NULL;
         return -1;
     }
+    /* Parte 5: a thread de replicação também escreve neste arquivo; esperamos
+     * a outra escrita terminar em vez de devolver internal_error ao bot. */
+    sqlite3_busy_timeout(banco->conexao, 5000);
     /* As tabelas existentes são preservadas ao reiniciar o servidor.
      * Guardamos o evento publicado e os pedidos/respostas completos em binário;
      * assim dá para recuperar os dados sem depender do que apareceu no terminal.
@@ -885,6 +889,10 @@ int main(void)
         printf("Não foi possível iniciar a coordenação.\n");
         goto fim;
     }
+    if (replicacao_iniciar(contexto, nome_servidor, arquivo_banco) != 0) {
+        printf("Não foi possível iniciar a replicação.\n");
+        goto fim;
+    }
     if (referencia_registrar(&referencia)) referencia_listar(&referencia);
     int recebidas = 0;
     codigo = 0;
@@ -931,6 +939,7 @@ int main(void)
 fim:
     fflush(stdout);
     coordenacao_encerrar();
+    replicacao_encerrar();
     if (publicador != NULL) {
         int zero = 0;
         zmq_setsockopt(publicador, ZMQ_LINGER, &zero, sizeof zero);
