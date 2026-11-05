@@ -73,6 +73,8 @@ public class Servidor {
 
         try (Statement stmt = banco.createStatement()) {
 
+            stmt.execute("PRAGMA busy_timeout=5000");
+
             stmt.executeUpdate("""
                 CREATE TABLE IF NOT EXISTS logins (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -503,10 +505,12 @@ public class Servidor {
             RegistroServidor registro = new RegistroServidor(contexto, nomeServidor);
             int recebidas = 0;
             coordenacao = new Coordenacao(contexto, registro);
-            try {
+            try (Replicacao replicacao = new Replicacao(arquivoBanco, nomeServidor)) {
                 coordenacao.iniciar();
                 if (registro.registrar()) registro.listar();
+                replicacao.iniciar();
                 while (!Thread.currentThread().isInterrupted()) {
+                    replicacao.verificar();
                     registro.manterCadastro();
 
                     byte[] pedidoBytes = servidor.recv(0);
@@ -645,3 +649,4 @@ public class Servidor {
         }
     }
 }
+
