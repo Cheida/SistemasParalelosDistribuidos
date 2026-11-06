@@ -10,9 +10,9 @@
 
 Este projeto está sendo desenvolvido para a disciplina de Sistemas Distribuídos. A proposta é construir um sistema de troca de mensagens em canais públicos, inspirado em serviços como BBS e IRC, colocando em prática os conceitos estudados nas aulas.
 
-No nosso sistema, os usuários são representados por bots que fazem login, consultam os canais disponíveis e enviam pedidos aos servidores automaticamente. Ao longo do trabalho, acrescentamos a publicação de mensagens, a sincronização dos relógios, a eleição de um coordenador e a replicação dos dados entre os servidores.
+No nosso sistema, os usuários são representados por bots que fazem login, consultam os canais disponíveis e enviam pedidos aos servidores automaticamente. O sistema também inclui publicação de mensagens, sincronização dos relógios, eleição de um coordenador e replicação dos dados entre os servidores.
 
-O desenvolvimento está dividido entre Python, Java e C. Cada linguagem tem sua própria implementação de cliente e servidor, e todas se comunicam usando o mesmo protocolo. A ideia é testar a comunicação entre programas diferentes, além de observar como o sistema se comporta com vários clientes e servidores funcionando ao mesmo tempo.
+O desenvolvimento está dividido entre Python, Java e C. Cada linguagem tem sua implementação de cliente e servidor, e todas se comunicam usando o mesmo protocolo. A ideia é testar a comunicação entre programas diferentes, além de observar como o sistema se comporta com vários clientes e servidores funcionando ao mesmo tempo.
 
 ## Tecnologias e escolhas do grupo
 
@@ -26,11 +26,11 @@ O desenvolvimento está dividido entre Python, Java e C. Cada linguagem tem sua 
 
 Escolhemos MessagePack para usar um formato binário que possa ser lido nas três linguagens. Todas as mensagens devem conter o timestamp do envio, em milissegundos desde Unix epoch. O formato dos pedidos, das respostas e dos status está descrito em [docs/protocolo.md](docs/protocolo.md).
 
-Para a persistência, usamos SQLite por permitir salvar os dados em disco sem precisar de um serviço de banco separado. Cada servidor mantém seu próprio arquivo, sem compartilhar o mesmo banco com os demais. A sincronização dos dados entre os servidores é feita pela replicação da parte 5.
+Para a persistência, usamos SQLite por permitir salvar os dados em disco sem precisar de um serviço de banco separado. Cada servidor mantém seu próprio arquivo, sem compartilhar o mesmo banco com os demais. A parte 5 sincroniza os dados entre esses arquivos por replicação.
 
 ## Etapas do projeto
 
-O trabalho foi construído de forma incremental, seguindo as cinco partes do enunciado:
+O trabalho foi desenvolvido em cinco partes:
 
 1. **Request-Reply:** login dos bots, criação e listagem de canais e persistência dos logins e canais.
 2. **Publisher-Subscriber:** inscrição em canais, publicação e recebimento de mensagens e armazenamento das publicações.
@@ -63,14 +63,14 @@ ProjetoSPD/
 │   └── Dockerfile
 ├── Java/
 │   ├── pom.xml
-│   ├── src/main/java/
-│   │   ├── Cliente.java
-│   │   ├── Servidor.java
-│   │   ├── Protocolo.java
-│   │   ├── RegistroServidor.java
-│   │   ├── Coordenacao.java
-│   │   └── Replicacao.java
-│   └── Dockerfile
+│   ├── Dockerfile
+│   └── src/main/java/
+│       ├── Cliente.java
+│       ├── Servidor.java
+│       ├── Protocolo.java
+│       ├── RegistroServidor.java
+│       ├── Coordenacao.java
+│       └── Replicacao.java
 └── C/
     ├── cliente.c
     ├── servidor.c
@@ -85,7 +85,7 @@ ProjetoSPD/
     └── Dockerfile
 ```
 
-A pasta `infra` reúne o broker, que encaminha os pedidos dos clientes para os servidores e devolve as respostas. A mesma pasta guarda o proxy Pub/Sub da parte 2. As pastas de cada linguagem ficam responsáveis pelas respectivas implementações, e o serviço de referência usa a imagem Python.
+A pasta `infra` contém o broker e o proxy de publicações. `python`, `Java` e `C` têm os clientes, servidores e arquivos de eleição e replicação de cada linguagem. `docs` explica o protocolo.
 
 ## Como executar
 
@@ -103,7 +103,7 @@ A quantidade de clientes e servidores pode ser alterada no campo `scale` de cada
 
 ## Andamento atual
 
-As implementações Python, Java e C contêm login, canais, publicações, relógios lógicos, cadastro e heartbeat. As três linguagens também participam da parte 4: eleição do coordenador e sincronização pelo algoritmo de Berkeley. O serviço de referência, escrito em Python, fornece ranks e a lista de servidores ativos. As três linguagens também implementam a replicação da parte 5, com o mesmo protocolo, e trocam dados entre si.
+As implementações Python, Java e C contêm login, canais, publicações, relógios lógicos, cadastro e heartbeat. As três linguagens também participam da parte 4: eleição do coordenador e sincronização pelo algoritmo de Berkeley. O serviço de referência, escrito em Python, fornece ranks e a lista de servidores ativos. A replicação da parte 5 foi integrada em Python, Java e C, usando um protocolo comum na porta 5561.
 
 ## Como executar as versões atuais
 
@@ -111,7 +111,7 @@ As implementações Python, Java e C contêm login, canais, publicações, reló
 docker compose up --build
 ```
 
-A execução padrão inicia broker, proxy, referência e dois clientes e dois servidores de cada linguagem: Python, Java e C. Cada servidor já sobe com a coordenação da parte 4 e a replicação da parte 5. Não é necessário ativar perfis ou executar os serviços separadamente. A quantidade de cada serviço pode ser alterada no campo scale do Compose.
+A execução padrão inicia broker, proxy, referência e dois clientes e dois servidores de cada linguagem: Python, Java e C. Não é necessário ativar perfis ou executar os serviços separadamente. A quantidade de cada serviço pode ser alterada no campo scale do Compose.
 
 Todos os pedidos, respostas e eventos das três linguagens têm o campo `clock`. O contador começa em zero, aumenta antes de enviar e recebe o máximo entre o valor local e o recebido, seguindo a regra do enunciado. O broker e o proxy continuam apenas encaminhando as mensagens, sem alterar os contadores.
 
@@ -141,7 +141,7 @@ Testamos a eleição com servidores Python, Java e C no Docker. Ao parar o coord
 
 ## Armazenamento e limitações atuais
 
-Cada servidor mantém seus próprios logins, canais, publicações e registros das trocas em SQLite. Os servidores Python, Java e C replicam essas quatro tabelas entre si. Como a replicação é assíncrona, as listas e históricos podem variar por alguns segundos entre os servidores, até a próxima sincronização. O bot escolhe canais que foram listados, e a publicação não depende de o canal existir no cadastro local do servidor que atendeu aquele pedido.
+Cada servidor mantém seu próprio SQLite e replica logins, canais, publicações e trocas por meio do protocolo comum da parte 5. A replicação é assíncrona; por alguns instantes, as listas e históricos podem variar enquanto os eventos são copiados. O bot escolhe canais que foram listados, e a publicação não depende de o canal existir no cadastro local do servidor que atendeu aquele pedido.
 
 Todos os servidores usam volumes individuais anônimos. Parar e iniciar os mesmos containers mantém os dados; depois de remover os containers com `docker compose down`, um novo `up` não reassocia automaticamente esses volumes antigos. A referência usa o volume nomeado `dados_referencia`. As réplicas Java também têm nomes e bancos separados. O antigo volume compartilhado dados_servjava permanece declarado, mas não é montado nas novas réplicas e seus dados não são migrados automaticamente.
 
@@ -149,55 +149,35 @@ Pub/Sub não confirma recebimento individual pelos bots. A resposta `ok` à publ
 
 ## Enunciado
 
-O trabalho segue as orientações do [enunciado do projeto](https://gitlab.com/laferreira/fei/cc7261/-/blob/main/projeto/enunciado.md). Este README descreve as cinco partes implementadas e integradas pelo grupo.
+O trabalho segue as orientações do [enunciado do projeto](https://gitlab.com/laferreira/fei/cc7261/-/blob/main/projeto/enunciado.md). Este README documenta as partes implementadas e os comandos para executá-las durante a apresentação.
 
-## Comandos para apresentar a parte 4
+## Comandos para rodar o projeto SPD
 
-Abra o terminal na pasta deste README (`/Users/gustavo.cheida/Documents/ProjetoSPD`). Inicie todos os serviços e reconstrua as imagens para carregar o código atual:
-
-```sh
-docker compose up --build -d
-```
-
-Em outro terminal, acompanhe **ao vivo** apenas os eventos de eleição de Python, Java e C:
+Para apresentar, abrimos os terminais na pasta `ProjetoSPD`. No primeiro terminal, subimos tudo:
 
 ```sh
-docker compose logs -f --tail=0 servpy servjava servc | grep --line-buffered -E 'ELEIÇÃO INICIADA|COORDENADOR INDISPONÍVEL|COORDENADOR DEFINIDO|nome:|PUB servers'
+docker compose up --build
 ```
 
-`--tail=0` começa pelos eventos novos. Para ver o histórico de eleições já ocorridas:
+No segundo, acompanhamos a eleição e o ajuste dos relógios pelo algoritmo de Berkeley:
 
 ```sh
-docker compose logs --no-color servpy servjava servc | grep -E 'ELEIÇÃO INICIADA|COORDENADOR DEFINIDO|nome:|PUB servers' | tail -30
+docker compose logs -f --tail=100 servpy servjava servc | grep --line-buffered -E 'ELEIÇÃO|COORDENADOR|BERKELEY'
 ```
 
-Para ver o último registro de coordenador definido (pode estar desatualizado se o processo parou):
+No terceiro, consultamos o registro mais recente que informa o coordenador. Podemos rodar esse comando de novo depois de parar um servidor:
 
 ```sh
-docker compose logs --no-color servpy servjava servc | grep 'COORDENADOR DEFINIDO' | tail -1
+docker compose logs --timestamps --no-color servpy servjava servc | grep -E 'PUB servers.*coordenador:|BERKELEY.*coordenador:|SINCRONIZAÇÃO.*coordenador:' | sort -k3 | tail -1
 ```
 
-A eleição só ocorre quando não há coordenador ou quando o coordenador atual fica indisponível. Veja os containers com `docker compose ps` e pare o **container específico** que foi eleito:
+No quarto, acompanhamos as réplicas em Python, Java e C:
 
 ```sh
-docker compose ps
-docker stop NOME_OU_ID_DO_CONTAINER
+docker compose logs -f --tail=100 servpy servjava servc | grep --line-buffered -E 'RÉPLICA|erro'
 ```
 
-Depois de alguns segundos, o terminal de acompanhamento deve mostrar a falha, a nova eleição e o novo coordenador. Para demonstrar a troca de linguagem, pare primeiro os servidores Java e depois os Python; o coordenador passa de Java para Python e, em seguida, para C, conforme os ranks dos servidores ativos:
-
-```sh
-docker compose stop servjava
-docker compose stop servpy
-```
-
-Restaure os servidores após o teste:
-
-```sh
-docker compose up -d servjava servpy
-```
-
-`Control + C` encerra apenas o acompanhamento dos logs. Para encerrar todos os serviços, use `docker compose down`.
+Os comandos com `-f` continuam mostrando linhas novas. Para sair deles, usamos `Control + C`. O terceiro comando mostra o último coordenador citado nos logs; ele pode estar desatualizado se o servidor acabou de cair e a eleição ainda não terminou.
 
 ### Por que rank e clock crescem?
 
@@ -205,11 +185,11 @@ O **rank** é a ordem de cadastro persistida no banco da referência. Cada novo 
 
 O **clock** é um contador lógico de mensagens, não a hora do dia. Cada processo incrementa o contador ao enviar e atualiza seu valor ao receber um contador maior. Bots, respostas, publicações, heartbeat e coordenação fazem esse número crescer rapidamente. A sincronização de Berkeley ajusta o horário físico simulado (`timestamp`), não zera o clock lógico.
 
-## Parte 5 — consistência e replicação
+## Parte 5 — consistência e replicação em Python, Java e C
 
-As implementações Python, Java e C usam **replicação assíncrona por log de eventos com anti-entropia**. Cada servidor continua gravando em seu próprio SQLite. Um processo de replicação no mesmo servidor captura novas linhas das tabelas `logins`, `canais`, `publicacoes` e `trocas`, registra eventos duráveis e consulta periodicamente os outros servidores. Cada réplica envia os eventos que o par ainda não viu. Ela também retransmite eventos recebidos, de modo que um servidor novo consegue recuperar dados mesmo se o produtor original já parou, desde que ao menos uma cópia sobreviva.
+Para resolver a perda de histórico, usamos **replicação assíncrona por log de eventos com anti-entropia** nas três linguagens. Cada servidor continua com seu próprio banco SQLite. As novas linhas de `logins`, `canais`, `publicacoes` e `trocas` entram em um log de eventos. Depois, cada servidor busca os eventos que ainda não recebeu dos outros. Um evento recebido também pode ser repassado, então um servidor novo consegue recuperar o histórico de outra réplica que ainda esteja funcionando.
 
-A replicação é **eventualmente consistente**: depois de uma gravação há um pequeno intervalo antes de todos os bancos terem a linha. Ela não confirma a gravação em todas as réplicas antes de responder ao cliente. Uma falha imediata do único servidor que recebeu uma mensagem ainda pode perdê-la antes da primeira cópia. Python, Java e C seguem o mesmo protocolo e o mesmo esquema de tabelas, então um servidor de qualquer linguagem recebe os dados gravados pelos outros.
+Esse método é **eventualmente consistente**: depois de uma gravação, os outros bancos podem levar alguns segundos para receber a linha. O servidor responde ao cliente antes de confirmar todas as cópias. Por isso, se ele cair antes da primeira replicação, aquele dado ainda pode ser perdido. Compilamos a versão C e observamos nos logs trocas de eventos entre C, Java e Python.
 
 ### Protocolo comum às três linguagens
 
@@ -223,22 +203,10 @@ REP: {"eventos": [{"seq": inteiro, "origem": texto, "tipo": texto,
 
 A resposta traz até 100 eventos em ordem de `seq`. O consumidor grava cada evento e seu novo cursor na **mesma transação**. A identidade `(origem, tipo, chave)` impede duplicatas e ciclos de retransmissão. `tipo` é `logins`, `canais`, `publicacoes` ou `trocas`. `dados` é um mapa MessagePack com as colunas da tabela correspondente. Para `logins` e `trocas`, `chave` é o ID local do produtor, mas o receptor gera seu próprio ID SQLite. Para `publicacoes`, a chave é o UUID da publicação. Para `canais`, a chave é o nome; se dois servidores criarem o mesmo canal, vence a menor dupla `(timestamp, origem)`, de forma determinística. Nenhum servidor compartilha diretamente um arquivo de banco com outro.
 
-A replicação tem seu próprio tráfego de controle; ele não conta para as 15 mensagens que disparam Berkeley. Cada servidor também envia heartbeat à referência a cada 20 segundos, para continuar visível mesmo sem pedidos de bots. As mensagens da porta 5561 usam o formato acima, sem os campos operation, timestamp e clock do envelope; os pedidos à referência continuam com o envelope completo.
+A replicação tem seu próprio tráfego de controle; ele não conta para as 15 mensagens que disparam Berkeley. Os processos de replicação enviam heartbeat periódico à referência para manter os servidores visíveis mesmo sem pedidos de bots.
 
-### Verificar as cópias
+### Verificar as réplicas
 
-Depois de subir o projeto com `docker compose up --build -d`, use `docker compose ps servpy` para ver os nomes das duas réplicas. Compare, em cada uma, a quantidade de linhas das quatro tabelas (substitua `NOME_DO_CONTAINER`):
+Depois de subir o projeto com `docker compose up --build -d`, use `docker compose ps` para ver os nomes dos containers. Para conferir os logs de replicação de Python, Java e C, use o quarto comando da seção acima.
 
-```sh
-docker exec NOME_DO_CONTAINER python -c 'import sqlite3; b=sqlite3.connect("/app/dados/servpy.db"); print({t:b.execute("SELECT COUNT(*) FROM "+t).fetchone()[0] for t in ("logins","canais","publicacoes","trocas")})'
-```
-
-As imagens Java e C não têm Python nem o cliente sqlite3. Para elas, acompanhe os lotes recebidos pelos logs:
-
-```sh
-docker compose logs servjava servc | grep 'RÉPLICA'
-```
-
-Com os bots ainda enviando mensagens, as contagens podem diferir por alguns segundos. Em bancos novos, quando pararem as gravações e a sincronização terminar, todas as réplicas devem ter as mesmas linhas. Bancos usados durante testes anteriores podem conter linhas duplicadas em `logins` e `trocas`; nesses casos, compare os registros distintos ou comece um teste com volumes novos apenas se puder descartar os dados antigos. Os logs dos servidores mostram `RÉPLICA | ... eventos recebidos` quando chegam lotes, e `RÉPLICA | erro` se algum evento for recusado.
-
-Testamos a replicação entre servidores C e Python no Docker, com bots das duas linguagens. Depois que os bots pararam, os quatro bancos ficaram com as mesmas linhas nas quatro tabelas. Quando o mesmo canal foi criado em quatro servidores diferentes, todos ficaram com o mesmo vencedor, o de menor timestamp. Um servidor C novo, com banco vazio, recuperou todos os eventos, inclusive os de servidores Python que já estavam parados.
+Com os bots enviando mensagens, os bancos podem ficar alguns instantes defasados; as mensagens `RÉPLICA | ... eventos recebidos de ...` mostram o servidor de origem de cada lote.
